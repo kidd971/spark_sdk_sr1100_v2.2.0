@@ -1,0 +1,8 @@
+if (HARDWARE STREQUAL EVK)
+    add_subdirectory(evk1_4)
+elseif(HARDWARE STREQUAL QUASAR)
+    add_subdirectory(quasar)
+    if (TRANSCEIVER STREQUAL "SR1100")
+        target_compile_definitions(hardware PRIVATE QUASAR_SPI_INTERDATA_IDLENESS=SPI_MASTER_INTERDATA_IDLENESS_00CYCLE)
+    endif()
+endif()
