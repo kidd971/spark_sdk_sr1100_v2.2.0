@@ -190,14 +190,6 @@ int main(void)
 
 
     while (1) {
-        //quasar_led_toggle(QUASAR_LED_USER_1);
-        //quasar_led_toggle(QUASAR_LED_USER_1);
-        //quasar_led_toggle(QUASAR_LED_USER_1);
-        //quasar_led_toggle(QUASAR_LED_USER_1);
-        //facade_tx_audio_conn_status();
-        //facade_rx_audio_conn_status();
-        //facade_delay_ms(250); //ms
-
 
         switch (device_pairing_state) {
         case DEVICE_UNPAIRED:
@@ -216,7 +208,9 @@ int main(void)
         }
 
         /* Statistics are displayed at intervals set by the timer when paired; timer stops if unpaired. */
-        //if (should_print_stats()) { print_stats(); }
+        if (should_print_stats()) {
+            print_stats();
+        }
     }
 
     return 0;

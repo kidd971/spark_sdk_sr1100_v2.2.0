@@ -79,6 +79,25 @@ void facade_board_init(void)
 
 void facade_audio_coord_init(void)
 {
+    #if 1 //AV_IND_BOARD_BRING_UP
+    //master
+    quasar_sai_config_t sai_config = {
+        .rx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
+        .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
+        .sai_mode = QUASAR_SAI_MASTER_MODE,
+        .sai_protocol = QUASAR_SAI_PROTOCOL_I2S_LSBJUSTIFIED,
+        .sai_audio_frequency = QUASAR_SAI_AUDIO_FREQUENCY_48K,
+    };
+
+
+    /* Reset codec before initializing the SAI. */
+    quasar_timer_delay_ms(1);
+    /* Initialize the SAI peripheral. */
+    quasar_audio_init_sai(sai_config);
+
+
+    #else //SPARK EVK
+    //slave
     quasar_sai_config_t sai_config = {
         .rx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -87,15 +106,11 @@ void facade_audio_coord_init(void)
     };
 
     /* Reset codec before initializing the SAI. */
-    //AV_IND no codec
-    //max98091_reset_codec(&codec_hal);
+    max98091_reset_codec(&codec_hal);
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
 
-    /* Init codec and generate SCLK */
-    //AV_IND no codec
-    #if 0
     max98091_codec_cfg_t cfg = {
         .sampling_rate = MAX98091_AUDIO_48KHZ,
         .word_size = MAX98091_AUDIO_24BITS,
@@ -105,11 +120,32 @@ void facade_audio_coord_init(void)
         .playback_filter_enabled = false,
     };
     max98091_init(&codec_hal, &cfg);
-    #endif
+
+
+    #endif //AV_IND_BOARD_BRING_UP
 }
 
 void facade_audio_node_init(void)
 {
+    #if 1 //AV_IND_BOARD_BRING_UP
+    //master
+    quasar_sai_config_t sai_config = {
+        .tx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
+        .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
+        .sai_mode = QUASAR_SAI_MASTER_MODE,
+        .sai_protocol = QUASAR_SAI_PROTOCOL_I2S_LSBJUSTIFIED,
+        .sai_audio_frequency = QUASAR_SAI_AUDIO_FREQUENCY_48K,
+    };
+
+
+    /* Reset codec before initializing the SAI. */
+    quasar_timer_delay_ms(1);
+    /* Initialize the SAI peripheral. */
+    quasar_audio_init_sai(sai_config);
+
+
+    #else //SPARK EVK
+    //slave
     quasar_sai_config_t sai_config = {
         .tx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -132,6 +168,11 @@ void facade_audio_node_init(void)
         .playback_filter_enabled = false,
     };
     max98091_init(&codec_hal, &cfg);
+
+
+    #endif //AV_IND_BOARD_BRING_UP
+
+
 }
 
 void facade_audio_deinit(void)
@@ -223,11 +264,6 @@ void facade_rx_audio_conn_status(void)
 
 void facade_rx_data_conn_status(void)
 {
-}
-
-void facade_delay_ms(uint32_t ms_delay)
-{
-    quasar_timer_delay_ms(ms_delay);
 }
 
 

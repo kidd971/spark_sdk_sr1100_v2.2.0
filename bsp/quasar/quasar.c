@@ -41,9 +41,10 @@ void quasar_init(quasar_config_t quasar_config)
     /* Initialize ADC and get board revision. */
     board_revision = quasar_adc_init();
 
+#if 1 //AV_IND_BOARD_BRING_UP
     //force board version to REVB
     board_revision = QUASAR_REVB;
-
+#endif
     /* Deinitialize the unnecessary GPIO based on the detected revision. */
     patch_board_revision(board_revision);
 

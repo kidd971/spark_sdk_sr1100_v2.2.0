@@ -145,7 +145,6 @@ void facade_tx_data_conn_status(void);
  */
 void facade_rx_audio_conn_status(void);
 
-void facade_delay_ms(uint32_t ms_delay);
 
 /** @brief Notify user of the wireless Data RX connection status.
  */
