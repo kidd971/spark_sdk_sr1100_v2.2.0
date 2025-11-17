@@ -395,12 +395,10 @@ void facade_notify_not_paired(void)
 
 void facade_notify_pairing_successful(void)
 {
-    //quasar_rgb_configure_color(QUASAR_RGB_COLOR_MAGENTA);
-    //quasar_rgb_set();
-
-    //av industry use PA1 as pairing led
-    quasar_led_set(QUASAR_LED_USER_1); //QUASAR_DEF_LED_USER_1_PORT
-
+    /* Restore original coordinator pairing indication: RGB magenta solid. */
+    quasar_rgb_clear();
+    quasar_rgb_configure_color(QUASAR_RGB_COLOR_MAGENTA);
+    quasar_rgb_set();
 }
 
 void facade_led_all_off(void)
