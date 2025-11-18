@@ -10,6 +10,7 @@
 /* INCLUDES *******************************************************************/
 #include "audio_unidirectional_facade.h"
 #include "max98091.h"
+#include "max98091_reg.h"
 #include "quasar.h"
 #include "tinyusb_baremetal.h"
 
@@ -42,6 +43,7 @@ static max98091_i2c_hal_t codec_hal = {
     .read = quasar_audio_i2c_read_byte_blocking,
     .write = quasar_audio_i2c_write_byte_blocking,
 };
+static bool has_codec = false; /* Set to true when coord init is called */
 
 /* PRIVATE FUNCTION PROTOTYPES ************************************************/
 static void led1_blink(uint8_t blink_count);
@@ -71,7 +73,7 @@ void facade_board_init(void)
 
     quasar_init(quasar_cfg);
 
-    /* Initialize the Codec's I2C interface. */
+    /* Initialize the Codec's I2C interface - will be used if coordinator (has codec). */
     quasar_audio_init_i2c();
 
     tinyusb_baremetal_setup();
@@ -79,7 +81,8 @@ void facade_board_init(void)
 
 void facade_audio_coord_init(void)
 {
-    #if 1 //AV_IND_BOARD_BRING_UP
+    has_codec = true; /* Coordinator has codec */
+    #if 0 //AV_IND_BOARD_BRING_UP
     //master
     quasar_sai_config_t sai_config = {
         .rx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
@@ -94,6 +97,27 @@ void facade_audio_coord_init(void)
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
+
+    /* Initialize the codec for record path when MCU drives clocks. */
+    max98091_codec_cfg_t cfg = {
+        .sampling_rate = MAX98091_AUDIO_48KHZ,
+        .word_size = MAX98091_AUDIO_24BITS,
+        .record_enabled = true,
+        .playback_enabled = false,
+        .record_filter_enabled = false,
+        .playback_filter_enabled = false,
+    };
+    /* Ensure codec is in a known state, then configure it. */
+    max98091_reset_codec(&codec_hal);
+    quasar_timer_delay_ms(1);
+    max98091_init(&codec_hal, &cfg);
+    /* Set codec DAI to Slave to use MCU clocks. */
+    {
+        uint8_t mm = 0;
+        quasar_audio_i2c_read_byte_blocking(codec_hal.i2c_addr, MAX98091_REG_MASTER_MODE, &mm);
+        mm &= ~(uint8_t)0x80; /* Clear MAS bit -> Slave */
+        quasar_audio_i2c_write_byte_blocking(codec_hal.i2c_addr, MAX98091_REG_MASTER_MODE, mm);
+    }
 
 
     #else //SPARK EVK
@@ -128,7 +152,7 @@ void facade_audio_coord_init(void)
 void facade_audio_node_init(void)
 {
     #if 1 //AV_IND_BOARD_BRING_UP
-    //master
+    //master (Node has no codec, just SAI master for I2S output)
     quasar_sai_config_t sai_config = {
         .tx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -138,7 +162,7 @@ void facade_audio_node_init(void)
     };
 
 
-    /* Reset codec before initializing the SAI. */
+    /* Node has no codec - only initialize SAI for I2S output. */
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
@@ -178,7 +202,9 @@ void facade_audio_node_init(void)
 void facade_audio_deinit(void)
 {
     quasar_audio_deinit_sai();
-    max98091_reset_codec(&codec_hal);
+    if (has_codec) {
+        max98091_reset_codec(&codec_hal);
+    }
 }
 
 void facade_set_sai_complete_callback(void (*tx_callback)(void), void (*rx_callback)(void))

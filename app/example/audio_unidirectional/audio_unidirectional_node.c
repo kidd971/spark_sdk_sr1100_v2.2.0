@@ -78,7 +78,67 @@ static const sac_sample_format_t CONSUMER_SAC_SAMPLE_FORMAT = {
 };
 
 static uint8_t audio_memory_pool[SAC_MEM_POOL_SIZE];
+/* Memory corruption sentinels */
+static uint32_t node_audio_pool_guard_head = 0xDEADBEEF;
+static uint32_t node_audio_pool_guard_tail = 0xA5A5A5A5;
+static void node_check_audio_pool_guards(const char *tag)
+{
+    if (node_audio_pool_guard_head != 0xDEADBEEF || node_audio_pool_guard_tail != 0xA5A5A5A5) {
+        char msg[80];
+        sprintf(msg, "CORRUPTION(node)! %s head=%08lX tail=%08lX\n", tag,
+                (unsigned long)node_audio_pool_guard_head,
+                (unsigned long)node_audio_pool_guard_tail);
+        facade_print_error_string(msg);
+    }
+}
 static sac_pipeline_t *sac_pipeline;
+/* Debug watch variables (no printf on Node) */
+typedef struct node_debug_state {
+    volatile uint32_t rx_audio_ack_count;      /* number of RX audio callbacks */
+    volatile uint32_t swc_produce_count;       /* times SWC produced into pipeline */
+    volatile uint32_t pipeline_process_count;  /* times pipeline_process executed */
+    volatile uint32_t i2s_consume_count;       /* times codec consumed samples */
+    volatile uint32_t last_left_sample;        /* last left sample (unpacked 24-bit in 32-bit container) */
+    volatile uint32_t last_right_sample;       /* last right sample */
+    volatile uint16_t last_payload_size;       /* last SWC payload size (audio bytes excluding header) */
+    volatile uint8_t  fallback_active;         /* current fallback flag */
+    volatile uint32_t producer_buffer_load;    /* producer buffer load at last process */
+    volatile uint32_t consumer_buffer_load;    /* consumer buffer load at last process */
+    volatile uint32_t seq_last;                /* last received sequence */
+    volatile uint32_t seq_expected;            /* expected next sequence */
+    volatile uint32_t seq_lost;                /* accumulated lost packets */
+} node_debug_state_t;
+static node_debug_state_t g_node_dbg = {0};
+
+void sac_debug_update_rx_seq(uint32_t seq)
+{
+    if (g_node_dbg.seq_last == 0 && g_node_dbg.seq_expected == 0) {
+        g_node_dbg.seq_last = seq;
+        g_node_dbg.seq_expected = seq + 1;
+        return;
+    }
+    if (seq != g_node_dbg.seq_expected) {
+        /* Handle wrap naturally in unsigned arithmetic */
+        uint32_t delta = seq - g_node_dbg.seq_expected;
+        g_node_dbg.seq_lost += (delta + 0u); /* delta missing packets */
+    }
+    g_node_dbg.seq_last = seq;
+    g_node_dbg.seq_expected = seq + 1;
+}
+
+/* Strong implementation of I2S sample debug hook (called from backend) */
+void sac_debug_update_i2s_tx_samples(const uint8_t *samples, uint16_t size)
+{
+    /* Expect 32-bit container per sample, stereo interleaved */
+    if (samples == NULL || size < 8) {
+        return;
+    }
+
+    const uint32_t *p32 = (const uint32_t *)samples;
+    g_node_dbg.last_left_sample = p32[0];
+    g_node_dbg.last_right_sample = p32[1];
+    g_node_dbg.last_payload_size = size;
+}
 
 /* **** Processing Stages **** */
 static sac_fallback_instance_t sac_fallback_instance;
@@ -276,7 +336,11 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
         .name = "RX Audio Connection",
         .source_address = remote_address,
         .destination_address = local_address,
-        .max_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE + sizeof(sac_header_t),
+        .max_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE + sizeof(sac_header_t)
+    #if SAC_ENABLE_DEBUG_SEQ
+                    + 4
+    #endif
+        ,
         .queue_size = SWC_QUEUE_SIZE,
         .timeslot_id = rx_timeslots,
         .timeslot_count = ARRAY_SIZE(rx_timeslots),
@@ -427,11 +491,15 @@ static void conn_rx_audio_success_callback(void *conn)
 
     sac_status_t sac_status = SAC_OK;
 
+    g_node_dbg.rx_audio_ack_count++;
+
     facade_rx_audio_conn_status();
 
     /* The SWC produces audio samples upon receiving them from the Coordinator. */
     sac_pipeline_produce(sac_pipeline, &sac_status);
     ASSERT_SAC_STATUS(sac_status);
+
+    g_node_dbg.swc_produce_count++;
 
     /* Trigger audio process. */
     facade_audio_process_timer_trigger();
@@ -621,11 +689,19 @@ static void app_audio_core_init(void)
     swc_producer_instance.connection = rx_audio_conn;
 
     /* Initialize Audio Core. */
+    /* Fill memory pool with pattern before init to catch overwrites */
+    memset(audio_memory_pool, 0xCD, sizeof(audio_memory_pool));
+    node_audio_pool_guard_head = 0xDEADBEEF;
+    node_audio_pool_guard_tail = 0xA5A5A5A5;
+    facade_print_string("DBG_NODE: sac_init begin\n");
+    node_check_audio_pool_guards("before_sac_init");
     sac_cfg_t core_cfg = {
         .memory_pool = audio_memory_pool,
         .memory_pool_size = SAC_MEM_POOL_SIZE,
     };
     sac_init(core_cfg, &sac_status);
+    facade_print_string("DBG_NODE: sac_init done\n");
+    node_check_audio_pool_guards("after_sac_init");
     ASSERT_SAC_STATUS(sac_status);
 
     /*
@@ -650,37 +726,49 @@ static void app_audio_core_init(void)
         .audio_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE,
         .queue_size = SAC_MIN_PRODUCER_QUEUE_SIZE,
     };
+    facade_print_string("DBG_NODE: endpoint swc_producer init\n");
     swc_producer = sac_endpoint_init((void *)&swc_producer_instance, "SWC EP (Producer)", swc_producer_iface,
                                      swc_producer_cfg, &sac_status);
+    node_check_audio_pool_guards("after_swc_producer");
     ASSERT_SAC_STATUS(sac_status);
 
     sac_fallback_instance = sac_fallback_get_defaults();
     sac_fallback_instance.connection = rx_audio_conn;
     sac_fallback_instance.is_tx_device = false;
+    facade_print_string("DBG_NODE: processing fallback init\n");
     sac_fallback_processing = sac_processing_stage_init(&sac_fallback_instance, "Fallback RX", fallback_iface,
                                                         &sac_status);
+    node_check_audio_pool_guards("after_fallback_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Processing stage that unpacks 24 bits to 24 bits encoded on 32 bits if fallback is deactivated. */
     audio_packing_instance.packing_mode = SAC_UNPACK_24BITS;
+    facade_print_string("DBG_NODE: processing unpack24 init\n");
     sac_packing_processing = sac_processing_stage_init((void *)&audio_packing_instance, "Audio Unpacking",
                                                        packing_iface, &sac_status);
+    node_check_audio_pool_guards("after_unpack24_proc");
     ASSERT_SAC_STATUS(sac_status);
     /* Processing stage that unpacks 16 bits to 24 bits encoded on 32 bits if fallback is activated. */
     audio_packing_fallback_instance.packing_mode = SAC_UNPACK_24BITS_16BITS;
+    facade_print_string("DBG_NODE: processing unpack16 init\n");
     sac_packing_fallback_processing = sac_processing_stage_init((void *)&audio_packing_fallback_instance,
                                                                 "Audio Unpacking", packing_fallback_iface, &sac_status);
+    node_check_audio_pool_guards("after_unpack16_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Processing stage that handles the volume control. */
     volume_instance.initial_volume_level = 100;
     volume_instance.sample_format = CONSUMER_SAC_SAMPLE_FORMAT;
+    facade_print_string("DBG_NODE: processing volume init\n");
     volume_processing = sac_processing_stage_init((void *)&volume_instance, "Digital Volume Control", volume_iface,
                                                   &sac_status);
+    node_check_audio_pool_guards("after_volume_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Processing stage that compensates the clock drift. */
+    facade_print_string("DBG_NODE: processing cdc init\n");
     cdc_processing = sac_facade_cdc_processing_init(CONSUMER_SAC_SAMPLE_FORMAT, &sac_status);
+    node_check_audio_pool_guards("after_cdc_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Mute packet processing stage initialization. */
@@ -689,8 +777,10 @@ static void app_audio_core_init(void)
                                                                          CONSUMER_SAC_SAMPLE_FORMAT,
                                                                          I2S_SAMPLE_RATE_HZ);
 
+    facade_print_string("DBG_NODE: processing mute_underflow init\n");
     mute_on_underflow_processing = sac_processing_stage_init((void *)&mute_on_underflow_instance, "Mute on underflow",
                                                              mute_on_underflow_iface, &sac_status);
+    node_check_audio_pool_guards("after_mute_underflow_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Initialize codec consumer endpoint. */
@@ -701,32 +791,50 @@ static void app_audio_core_init(void)
         .audio_payload_size = MAIN_CHANNEL_I2S_PAYLOAD_SIZE,
         .queue_size = MAIN_CHANNEL_LATENCY_QUEUE_SIZE,
     };
+    facade_print_string("DBG_NODE: endpoint i2s_consumer init\n");
     i2s_consumer = sac_endpoint_init(NULL, "I2S EP (Consumer)", i2s_consumer_iface, i2s_consumer_cfg, &sac_status);
+    node_check_audio_pool_guards("after_i2s_consumer");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Initialize audio pipeline. */
     sac_pipeline_cfg_t pipeline_cfg = {
         .do_initial_buffering = false,
     };
+    facade_print_string("DBG_NODE: pipeline init\n");
     sac_pipeline = sac_pipeline_init("SWC -> I2S", swc_producer, pipeline_cfg, i2s_consumer, &sac_status);
+    node_check_audio_pool_guards("after_pipeline_init");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Add processing stages to the audio pipeline. */
+    facade_print_string("DBG_NODE: add fallback proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_fallback_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_fallback");
     ASSERT_SAC_STATUS(sac_status);
+    facade_print_string("DBG_NODE: add unpack24 proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_packing_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_unpack24");
     ASSERT_SAC_STATUS(sac_status);
+    facade_print_string("DBG_NODE: add unpack16 proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_packing_fallback_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_unpack16");
     ASSERT_SAC_STATUS(sac_status);
+    facade_print_string("DBG_NODE: add volume proc\n");
     sac_pipeline_add_processing(sac_pipeline, volume_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_volume");
     ASSERT_SAC_STATUS(sac_status);
+    facade_print_string("DBG_NODE: add cdc proc\n");
     sac_pipeline_add_processing(sac_pipeline, cdc_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_cdc");
     ASSERT_SAC_STATUS(sac_status);
+    facade_print_string("DBG_NODE: add mute_underflow proc\n");
     sac_pipeline_add_processing(sac_pipeline, mute_on_underflow_processing, &sac_status);
+    node_check_audio_pool_guards("after_add_mute_underflow");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Setup audio pipeline. */
+    facade_print_string("DBG_NODE: pipeline setup\n");
     sac_pipeline_setup(sac_pipeline, &sac_status);
+    node_check_audio_pool_guards("after_pipeline_setup");
     ASSERT_SAC_STATUS(sac_status);
 }
 
@@ -826,6 +934,8 @@ static void i2s_tx_audio_complete_callback(void)
     /* The codec consumes audio samples produces by the SWC (which receives them from the Coordinator). */
     sac_pipeline_consume(sac_pipeline, &sac_status);
     ASSERT_SAC_STATUS(sac_status);
+
+    g_node_dbg.i2s_consume_count++;
 }
 
 /** @brief Update the fallback LED indicator.
@@ -843,9 +953,19 @@ static void fallback_led_handler(void)
 static void audio_process_callback(void)
 {
     sac_status_t sac_status = SAC_OK;
+    uint32_t pl_load = sac_pipeline_get_producer_buffer_load(sac_pipeline, &sac_status);
+    ASSERT_SAC_STATUS(sac_status);
+    uint32_t cl_load = sac_pipeline_get_consumer_buffer_load(sac_pipeline, &sac_status);
+    ASSERT_SAC_STATUS(sac_status);
+    g_node_dbg.producer_buffer_load = pl_load;
+    g_node_dbg.consumer_buffer_load = cl_load;
 
-    /* Processing stages of the pipeline are executed. */
     sac_pipeline_process(sac_pipeline, &sac_status);
+    ASSERT_SAC_STATUS(sac_status);
+    g_node_dbg.pipeline_process_count++;
+
+    /* Update fallback flag */
+    g_node_dbg.fallback_active = sac_fallback_is_active(&sac_fallback_instance, &sac_status) ? 1 : 0;
     ASSERT_SAC_STATUS(sac_status);
 }
 

@@ -15,6 +15,38 @@
 /* PRIVATE GLOBALS ************************************************************/
 static sac_cdc_pll_instance_t cdc_instance;
 
+/* Debug weak hook: allow apps to observe I2S samples without adding backend dependencies */
+#if defined(__GNUC__)
+__attribute__((weak)) void sac_debug_update_i2s_rx_samples(const uint8_t *samples, uint16_t size)
+{
+    (void)samples;
+    (void)size;
+}
+#else
+void sac_debug_update_i2s_rx_samples(const uint8_t *samples, uint16_t size);
+#endif
+/* Debug weak hook: allow apps to observe I2S samples without adding backend dependencies */
+#if defined(__GNUC__)
+__attribute__((weak)) void sac_debug_update_i2s_tx_samples(const uint8_t *samples, uint16_t size)
+{
+    (void)samples;
+    (void)size;
+}
+#else
+void sac_debug_update_i2s_tx_samples(const uint8_t *samples, uint16_t size);
+#endif
+
+/* Optional weak hook: allow app to override I2S RX samples for testing */
+#if defined(__GNUC__)
+__attribute__((weak)) void sac_debug_override_i2s_rx_samples(uint8_t *samples, uint16_t size)
+{
+    (void)samples;
+    (void)size;
+}
+#else
+void sac_debug_override_i2s_rx_samples(uint8_t *samples, uint16_t size);
+#endif
+
 /* PRIVATE FUNCTION PROTOTYPES ************************************************/
 static uint16_t ep_max98091_action_produce(void *instance, uint8_t *samples, uint16_t size);
 static void ep_max98091_start_produce(void *instance);
@@ -78,9 +110,10 @@ int sac_facade_cdc_format_stats(char *buffer, uint16_t size, sac_status_t *statu
 static uint16_t ep_max98091_action_produce(void *instance, uint8_t *samples, uint16_t size)
 {
     (void)instance;
-
     quasar_audio_sai_read_non_blocking(samples, size);
-
+    /* Allow application to override with test data if desired */
+    sac_debug_override_i2s_rx_samples(samples, size);
+    sac_debug_update_i2s_rx_samples(samples, size);
     return 0;
 }
 
@@ -116,6 +149,9 @@ static void ep_max98091_stop_produce(void *instance)
 static uint16_t ep_max98091_action_consume(void *instance, uint8_t *samples, uint16_t size)
 {
     (void)instance;
+
+    /* Inform application (Node) about outgoing I2S samples for debugging */
+    sac_debug_update_i2s_tx_samples(samples, size);
 
     quasar_audio_sai_write_non_blocking(samples, size);
 

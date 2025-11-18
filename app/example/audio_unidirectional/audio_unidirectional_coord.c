@@ -31,7 +31,7 @@
 
 /* CONSTANTS ******************************************************************/
 /* Total memory needed for the Audio Core. */
-#define SAC_MEM_POOL_SIZE 6000
+#define SAC_MEM_POOL_SIZE 8000
 /* Total memory needed for the Wireless Core. */
 #define SWC_MEM_POOL_SIZE 10000
 /* The data connection supports up to 16 bytes. */
@@ -83,6 +83,19 @@ typedef struct user_data {
 /* PRIVATE GLOBALS ************************************************************/
 /* **** Audio Core **** */
 static uint8_t audio_memory_pool[SAC_MEM_POOL_SIZE];
+/* Memory corruption sentinels */
+static uint32_t audio_pool_guard_head = 0xDEADBEEF;
+static uint32_t audio_pool_guard_tail = 0xA5A5A5A5;
+static void coord_check_audio_pool_guards(const char *tag)
+{
+    if (audio_pool_guard_head != 0xDEADBEEF || audio_pool_guard_tail != 0xA5A5A5A5) {
+        char msg[80];
+        sprintf(msg, "CORRUPTION(coord)! %s head=%08lX tail=%08lX\n", tag,
+                (unsigned long)audio_pool_guard_head,
+                (unsigned long)audio_pool_guard_tail);
+        facade_print_error_string(msg);
+    }
+}
 static sac_pipeline_t *sac_pipeline;
 
 /* **** Processing Stages **** */
@@ -97,6 +110,114 @@ static sac_processing_t *sac_packing_fallback_processing;
 static sac_endpoint_t *i2s_producer;
 static ep_swc_instance_t swc_consumer_instance;
 static sac_endpoint_t *swc_consumer;
+/* Debug last TX sequence number updated via weak hook */
+static volatile uint32_t coord_last_tx_seq;
+void sac_debug_update_tx_seq(uint32_t seq) { coord_last_tx_seq = seq; }
+
+/* Debug: capture first I2S samples sent by Coordinator */
+volatile uint32_t coord_last_left_sample = 0;
+volatile uint32_t coord_last_right_sample = 0;
+volatile uint16_t coord_last_payload_size = 0;
+
+/* Enable to inject a test tone into I2S producer (pre-packing) for debugging */
+#ifndef COORD_INJECT_TEST_TONE
+#define COORD_INJECT_TEST_TONE 0
+#endif
+static uint32_t coord_tone_phase = 0;
+
+void sac_debug_update_i2s_rx_samples(const uint8_t *samples, uint16_t size)
+{
+    if (samples == NULL || size < 8) {
+        return;
+    }
+    const uint32_t *p32 = (const uint32_t *)samples;
+    coord_last_left_sample = p32[0];
+    coord_last_right_sample = p32[1];
+    coord_last_payload_size = size;
+}
+
+/* Optional strong hook: override I2S RX samples with a simple test pattern */
+void sac_debug_override_i2s_rx_samples(uint8_t *samples, uint16_t size)
+{
+#if COORD_INJECT_TEST_TONE
+    if (samples == NULL || size < 8) {
+        return;
+    }
+    /* Samples are 32-bit per channel, interleaved LR at I2S input */
+    uint32_t *p32 = (uint32_t *)samples;
+    uint16_t frames = (uint16_t)(size / (2u * sizeof(uint32_t)));
+    for (uint16_t i = 0; i < frames; i++) {
+        uint32_t l = (coord_tone_phase & 0x00FFFFFFu);      /* 24-bit ramp */
+        uint32_t r = ((~coord_tone_phase) & 0x00FFFFFFu);   /* inverted */
+        p32[2u * i + 0u] = l;
+        p32[2u * i + 1u] = r;
+        coord_tone_phase += 0x000100u; /* step */
+    }
+#else
+    (void)samples;
+    (void)size;
+#endif
+}
+
+/* Override at producer enqueue stage: ensures injection happens after DMA completes */
+void sac_debug_override_producer_packet(uint8_t *packet, uint16_t size, bool encapsulated)
+{
+#if COORD_INJECT_TEST_TONE
+    (void)encapsulated; /* I2S producer uses raw payload (non-encapsulated) */
+    if (packet == NULL || size < 8) {
+        return;
+    }
+    /* Inject 32-bit interleaved LR ramp to validate path */
+    uint32_t *p32 = (uint32_t *)packet;
+    uint16_t frames = (uint16_t)(size / (2u * sizeof(uint32_t)));
+    for (uint16_t i = 0; i < frames; i++) {
+        uint32_t l = (coord_tone_phase & 0x00FFFFFFu);
+        uint32_t r = ((~coord_tone_phase) & 0x00FFFFFFu);
+        p32[2u * i + 0u] = l;
+        p32[2u * i + 1u] = r;
+        coord_tone_phase += 0x000100u;
+    }
+#else
+    (void)packet;
+    (void)size;
+    (void)encapsulated;
+#endif
+}
+
+/* Debug: capture actual SWC TX packet (header + payload) just before OTA */
+void sac_debug_update_swc_tx_packet(const uint8_t *packet, uint16_t size)
+{
+    if (packet == NULL || size < sizeof(sac_header_t)) {
+        return;
+    }
+    const sac_header_t *hdr = (const sac_header_t *)packet;
+    uint16_t total_needed = (uint16_t)(sizeof(sac_header_t) + hdr->payload_size);
+    if (size < total_needed) {
+        return;
+    }
+    const uint8_t *data = packet + sizeof(sac_header_t);
+    coord_last_payload_size = hdr->payload_size;
+
+    /* Extract first stereo frame from payload depending on fallback flag */
+    if (hdr->fallback) {
+        /* Fallback mode: 16-bit packed per sample per channel */
+        if (hdr->payload_size < 4) {
+            return;
+        }
+        const uint16_t *p16 = (const uint16_t *)data;
+        coord_last_left_sample = (uint32_t)p16[0];
+        coord_last_right_sample = (uint32_t)p16[1];
+    } else {
+        /* Normal mode: 24-bit packed samples (LSB-aligned in 3 bytes) */
+        if (hdr->payload_size < 6) {
+            return;
+        }
+        uint32_t l = (uint32_t)data[0] | ((uint32_t)data[1] << 8) | ((uint32_t)data[2] << 16);
+        uint32_t r = (uint32_t)data[3] | ((uint32_t)data[4] << 8) | ((uint32_t)data[5] << 16);
+        coord_last_left_sample = l;
+        coord_last_right_sample = r;
+    }
+}
 
 /* **** Wireless Core **** */
 static uint8_t swc_memory_pool[SWC_MEM_POOL_SIZE];
@@ -226,7 +347,12 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
 {
     uint8_t remote_address = pairing_discovery_list[PAIRING_DEVICE_ROLE_NODE].node_address;
     uint8_t local_address = pairing_discovery_list[PAIRING_DEVICE_ROLE_COORDINATOR].node_address;
-    uint8_t fallback_thresholds[] = {FALLBACK_PAYLOAD_SIZE + sizeof(sac_header_t)};
+    /* Threshold based on payload-only size; header is added by SAC */
+    uint8_t fallback_thresholds[] = {FALLBACK_PAYLOAD_SIZE + sizeof(sac_header_t)
+#if SAC_ENABLE_DEBUG_SEQ
+                                     + 4
+#endif
+    };
     uint8_t fallback_cca_try_count[] = {SWC_CCA_AUDIO_FBK_TRY_COUNT};
 
     if (certification_mode != FACADE_CERTIF_NONE) {
@@ -272,7 +398,11 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
         .name = "TX Audio Connection",
         .source_address = local_address,
         .destination_address = remote_address,
-        .max_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE + sizeof(sac_header_t),
+        .max_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE + sizeof(sac_header_t)
+    #if SAC_ENABLE_DEBUG_SEQ
+                    + 4
+    #endif
+        ,
         .queue_size = SWC_QUEUE_SIZE,
         .timeslot_id = tx_timeslots,
         .timeslot_count = ARRAY_SIZE(tx_timeslots),
@@ -320,7 +450,6 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
         swc_connection_set_connection_priority(node, tx_data_conn, DATA_CONNECTION_PRIORITY, swc_err);
         ASSERT_SWC_STATUS(*swc_err);
     }
-
     /* Audio connection concurrency settings. */
     swc_connection_concurrency_cfg_t tx_audio_concurrency_cfg = {
         .enabled = true,
@@ -531,11 +660,19 @@ static void app_audio_core_init(void)
     swc_consumer_instance.connection = tx_audio_conn;
 
     /* Initialize Audio Core. */
+    /* Fill memory pool with pattern before init to catch overwrites */
+    memset(audio_memory_pool, 0xCD, sizeof(audio_memory_pool));
+    audio_pool_guard_head = 0xDEADBEEF;
+    audio_pool_guard_tail = 0xA5A5A5A5;
+    facade_print_string("DBG_COORD: sac_init begin\n");
+    coord_check_audio_pool_guards("before_sac_init");
     sac_cfg_t core_cfg = {
         .memory_pool = audio_memory_pool,
         .memory_pool_size = SAC_MEM_POOL_SIZE,
     };
     sac_init(core_cfg, &sac_status);
+    facade_print_string("DBG_COORD: sac_init done\n");
+    coord_check_audio_pool_guards("after_sac_init");
     ASSERT_SAC_STATUS(sac_status);
 
     /*
@@ -567,9 +704,11 @@ static void app_audio_core_init(void)
         .delayed_action = true,
         .channel_count = MAIN_CHANNEL_CHANNEL_COUNT,
         .audio_payload_size = MAIN_CHANNEL_I2S_PAYLOAD_SIZE,
-        .queue_size = SAC_MIN_PRODUCER_QUEUE_SIZE,
+        .queue_size = 4,
     };
+    facade_print_string("DBG_COORD: endpoint i2s_producer init\n");
     i2s_producer = sac_endpoint_init(NULL, "I2S EP (Producer)", i2s_producer_iface, i2s_producer_cfg, &sac_status);
+    coord_check_audio_pool_guards("after_i2s_producer");
     ASSERT_SAC_STATUS(sac_status);
 
     sac_fallback_instance = sac_fallback_get_defaults();
@@ -578,20 +717,26 @@ static void app_audio_core_init(void)
     sac_fallback_instance.cca_max_try_count = SWC_CCA_AUDIO_FBK_TRY_COUNT;
     sac_fallback_instance.get_tick = facade_get_tick_ms;
     sac_fallback_instance.tick_frequency_hz = 1000;
+    facade_print_string("DBG_COORD: processing fallback init\n");
     sac_fallback_processing = sac_processing_stage_init(&sac_fallback_instance, "Fallback TX", fallback_iface,
                                                         &sac_status);
+    coord_check_audio_pool_guards("after_fallback_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Processing stage that packs into 24 bits before sending if fallback is deactivated. */
     audio_packing_instance.packing_mode = SAC_PACK_24BITS;
+    facade_print_string("DBG_COORD: processing packing24 init\n");
     sac_packing_processing = sac_processing_stage_init((void *)&audio_packing_instance, "Audio Fallback Packing",
                                                        packing_iface, &sac_status);
+    coord_check_audio_pool_guards("after_pack24_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Processing stage that packs into 16 bits before sending if fallback is activated. */
     audio_packing_fallback_instance.packing_mode = SAC_PACK_24BITS_16BITS;
+    facade_print_string("DBG_COORD: processing packing16 init\n");
     sac_packing_fallback_processing = sac_processing_stage_init((void *)&audio_packing_fallback_instance,
                                                                 "Audio Packing", packing_fallback_iface, &sac_status);
+    coord_check_audio_pool_guards("after_pack16_proc");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Initialize SWC consumer endpoint. */
@@ -602,29 +747,41 @@ static void app_audio_core_init(void)
         .audio_payload_size = MAIN_CHANNEL_SWC_PAYLOAD_SIZE,
         .queue_size = MAIN_CHANNEL_LATENCY_QUEUE_SIZE,
     };
+    facade_print_string("DBG_COORD: endpoint swc_consumer init\n");
     swc_consumer = sac_endpoint_init((void *)&swc_consumer_instance, "SWC EP (Consumer)", swc_consumer_iface,
                                      swc_consumer_cfg, &sac_status);
+    coord_check_audio_pool_guards("after_swc_consumer");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Initialize audio pipeline. */
     sac_pipeline_cfg_t pipeline_cfg = {
         .do_initial_buffering = true,
     };
+    facade_print_string("DBG_COORD: pipeline init\n");
     sac_pipeline = sac_pipeline_init("I2S -> SWC", i2s_producer, pipeline_cfg, swc_consumer, &sac_status);
+    coord_check_audio_pool_guards("after_pipeline_init");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Add processing stages to the audio pipeline. */
+    facade_print_string("DBG_COORD: add fallback proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_fallback_processing, &sac_status);
+    coord_check_audio_pool_guards("after_add_fallback");
     ASSERT_SAC_STATUS(sac_status);
 
+    facade_print_string("DBG_COORD: add pack24 proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_packing_processing, &sac_status);
+    coord_check_audio_pool_guards("after_add_pack24");
     ASSERT_SAC_STATUS(sac_status);
 
+    facade_print_string("DBG_COORD: add pack16 proc\n");
     sac_pipeline_add_processing(sac_pipeline, sac_packing_fallback_processing, &sac_status);
+    coord_check_audio_pool_guards("after_add_pack16");
     ASSERT_SAC_STATUS(sac_status);
 
     /* Setup audio pipeline. */
+    facade_print_string("DBG_COORD: pipeline setup\n");
     sac_pipeline_setup(sac_pipeline, &sac_status);
+    coord_check_audio_pool_guards("after_pipeline_setup");
     ASSERT_SAC_STATUS(sac_status);
 }
 
@@ -757,6 +914,7 @@ static void print_stats(void)
     const char *audio_stats_str = "\n<<  Audio Core Statistics  >>\n\r";
     const char *fallback_stats_str = "\n<<  Fallback Statistics  >>\n\r";
     const char *wireless_stats_str = "\n<<  Wireless Core Statistics  >>\n\r";
+    const char *debug_stats_str = "\n<<  Debug (Seq)  >>\n\r";
 
     memset(stats_string, 0, sizeof(stats_string));
 
@@ -804,6 +962,63 @@ static void print_stats(void)
     string_length += swc_connection_format_stats(rx_data_conn, node, stats_string + string_length,
                                                  sizeof(stats_string) - string_length, &swc_err);
     ASSERT_SWC_STATUS(swc_err);
+
+
+    /* ** Debug sequence statistics ** */
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length, debug_stats_str);
+
+    /* Get SWC statistics for TX audio connection (use update API, returns internal stats) */
+    swc_statistics_t *pstats = swc_connection_update_stats(tx_audio_conn, &swc_err);
+    ASSERT_SWC_STATUS(swc_err);
+
+    /* Calculate packet loss statistics */
+    uint32_t tx_seq_total = coord_last_tx_seq;
+    uint32_t swc_sent_acked = pstats ? pstats->packet_sent_and_acked_count : 0u;
+    uint32_t swc_sent_not_acked = pstats ? pstats->packet_sent_and_not_acked_count : 0u;
+    uint32_t swc_total_sent = swc_sent_acked + swc_sent_not_acked;
+    uint32_t swc_dropped = pstats ? pstats->packet_dropped_count : 0u;
+    uint32_t swc_cca_fail = pstats ? pstats->cca_fail_count : 0u;
+    uint32_t swc_cca_try_fail = pstats ? pstats->cca_try_fail_count : 0u;
+
+    double ack_rate = (swc_total_sent > 0u) ? (100.0 * (double)swc_sent_acked / (double)swc_total_sent) : 0.0;
+    double loss_rate = (swc_total_sent > 0u) ? (100.0 * (double)swc_sent_not_acked / (double)swc_total_sent) : 0.0;
+    /* Approx attempts per transmitted packet: 1 pass + average failed tries before pass */
+    double attempts_per_pkt = (swc_total_sent > 0u) ? (1.0 + ((double)swc_cca_try_fail / (double)swc_total_sent)) : 0.0;
+
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "Seq Total: %lu (Next: %lu)\r\n",
+                              (unsigned long)tx_seq_total,
+                              (unsigned long)(tx_seq_total + 1));
+
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "SWC Sent: %lu | ACKed: %lu (%.1f%%) | Not ACKed: %lu (%.1f%%)\r\n",
+                              (unsigned long)swc_total_sent,
+                              (unsigned long)swc_sent_acked, ack_rate,
+                              (unsigned long)swc_sent_not_acked, loss_rate);
+
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "SWC Dropped: %lu | CCA Fail: %lu\r\n",
+                              (unsigned long)swc_dropped,
+                              (unsigned long)swc_cca_fail);
+
+    /* Attempts/Packet and link quality */
+    double rssi_db = pstats ? ((double)pstats->rssi_avg / 10.0) : 0.0;
+    double rnsi_db = pstats ? ((double)pstats->rnsi_avg / 10.0) : 0.0;
+    double lm_db = pstats ? ((double)pstats->link_margin_avg / 10.0) : 0.0;
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "Attempts/Packet: %.2f | RSSI: %.1f dB | RNSI: %.1f dB | LM: %.1f dB\r\n",
+                              attempts_per_pkt, rssi_db, rnsi_db, lm_db);
+
+    /* Print I2S sample debug info */
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "I2S OUT L: 0x%08lX R: 0x%08lX Size: %u\r\n",
+                              (unsigned long)coord_last_left_sample,
+                              (unsigned long)coord_last_right_sample,
+                              (unsigned int)coord_last_payload_size);
+
+    /* Placeholder for Node RX stats - will be populated when data link reports them */
+    string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                              "Node: watch g_node_dbg (seq_last/seq_expected/seq_lost)\r\n");
 
     facade_print_string(stats_string);
 }

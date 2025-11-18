@@ -17,6 +17,26 @@ static void ep_swc_consumer_start(void *instance);
 static void ep_swc_producer_start(void *instance);
 static void ep_swc_stop(void *instance);
 
+/* Debug sequence instrumentation switch (default OFF for stock behavior) */
+#ifndef SAC_ENABLE_DEBUG_SEQ
+#define SAC_ENABLE_DEBUG_SEQ 0
+#endif
+
+/* Optional weak debug hooks implemented in application if needed */
+__attribute__((weak)) void sac_debug_update_rx_seq(uint32_t seq) { (void)seq; }
+__attribute__((weak)) void sac_debug_update_tx_seq(uint32_t seq) { (void)seq; }
+/* Optional weak hook to observe SWC TX packet (header+payload before OTA) */
+__attribute__((weak)) void sac_debug_update_swc_tx_packet(const uint8_t *packet, uint16_t size)
+{
+    (void)packet;
+    (void)size;
+}
+
+#if SAC_ENABLE_DEBUG_SEQ
+/* TX sequence counter */
+static uint32_t g_swc_tx_seq = 0;
+#endif
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 void sac_endpoint_swc_init(sac_endpoint_interface_t *swc_producer_iface, sac_endpoint_interface_t *swc_consumer_iface)
 {
@@ -44,16 +64,34 @@ void sac_endpoint_swc_init(sac_endpoint_interface_t *swc_producer_iface, sac_end
 static uint16_t ep_swc_action_produce(void *instance, uint8_t *samples, uint16_t size)
 {
     uint8_t *payload = NULL;
-    uint8_t payload_size = 0;
+    uint16_t payload_size = 0; /* May include debug seq bytes when enabled */
     swc_error_t err = SWC_ERR_NONE;
     ep_swc_instance_t *inst = (ep_swc_instance_t *)instance;
     (void)size;
 
     payload_size = swc_connection_receive(inst->connection, &payload, &err);
-
-    memcpy(samples, payload, payload_size);
+    if (payload != NULL && payload_size) {
+#if SAC_ENABLE_DEBUG_SEQ
+        /* Expect format: [header][audio payload][optional 4-byte seq] */
+        if (payload_size >= sizeof(sac_header_t)) {
+            sac_header_t *hdr = (sac_header_t *)payload;
+            uint16_t expected_total = sizeof(sac_header_t) + hdr->payload_size;
+            if (payload_size >= expected_total + 4) {
+                /* Extract sequence number */
+                uint32_t seq;
+                memcpy(&seq, payload + expected_total, 4);
+                sac_debug_update_rx_seq(seq);
+                /* Copy only header + audio payload to samples */
+                memcpy(samples, payload, expected_total);
+                swc_connection_receive_complete(inst->connection, &err);
+                return expected_total; /* Strip debug bytes */
+            }
+        }
+#endif
+        /* Copy everything */
+        memcpy(samples, payload, payload_size);
+    }
     swc_connection_receive_complete(inst->connection, &err);
-
     return payload_size;
 }
 
@@ -74,13 +112,24 @@ static uint16_t ep_swc_action_consume(void *instance, uint8_t *samples, uint16_t
      *  fragmentation in the queue of the wireless.
      */
     swc_connection_get_payload_buffer(inst->connection, &buf, &err);
-    if (buf != NULL) {
-        memcpy(buf, samples, size);
-        swc_connection_send(inst->connection, buf, size, &err);
-        return size;
-    } else {
+    if (buf == NULL) {
         return 0;
     }
+    memcpy(buf, samples, size);
+    /* Debug: inform app of the outgoing SWC packet content (header + payload) */
+    sac_debug_update_swc_tx_packet(samples, size);
+#if SAC_ENABLE_DEBUG_SEQ
+    /* Append 4-byte sequence number after header+payload when size > 0 */
+    if (size > 0) {
+        uint32_t seq = g_swc_tx_seq++;
+        memcpy(buf + size, &seq, 4);
+        sac_debug_update_tx_seq(seq);
+        swc_connection_send(inst->connection, buf, size + 4, &err);
+        return size + 4;
+    }
+#endif
+    swc_connection_send(inst->connection, buf, size, &err);
+    return size;
 }
 
 /** @brief Start the consumer endpoint.

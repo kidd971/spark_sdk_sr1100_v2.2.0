@@ -47,6 +47,18 @@ static queue_node_t *start_mixing_process(sac_pipeline_t *pipeline, sac_status_t
 static bool is_consumer_overflowing(sac_endpoint_t *consumer);
 static sac_endpoint_t *find_last_endpoint(sac_endpoint_t *ep);
 
+/* Optional weak debug hook: override producer packet before it is enqueued */
+#if defined(__GNUC__)
+__attribute__((weak)) void sac_debug_override_producer_packet(uint8_t *packet, uint16_t size, bool encapsulated)
+{
+    (void)packet;
+    (void)size;
+    (void)encapsulated;
+}
+#else
+void sac_debug_override_producer_packet(uint8_t *packet, uint16_t size, bool encapsulated);
+#endif
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 void sac_init(sac_cfg_t cfg, sac_status_t *status)
 {
@@ -878,6 +890,16 @@ static void enqueue_producer_node(sac_pipeline_t *pipeline, sac_status_t *status
     if (producer->cfg.use_encapsulation) {
         /* If produced audio is encapsulated, save the payload size locally. */
         sac_node_set_payload_size(current_node, sac_node_get_header(current_node)->payload_size);
+    }
+
+    /* Allow application to override the just-completed producer packet before enqueue */
+    {
+        uint16_t psize = sac_node_get_payload_size(current_node);
+        uint8_t *pptr = producer->cfg.use_encapsulation ?
+                        (uint8_t *)sac_node_get_header(current_node) :
+                        sac_node_get_data(current_node);
+        uint16_t plen = producer->cfg.use_encapsulation ? (uint16_t)(sizeof(sac_header_t) + psize) : psize;
+        sac_debug_override_producer_packet(pptr, plen, producer->cfg.use_encapsulation);
     }
 
     /* There should at least be one node available in the free queue. If not, one of the producers has not processed the
