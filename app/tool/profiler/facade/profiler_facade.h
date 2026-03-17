@@ -54,6 +54,15 @@ void facade_log_init(void);
  */
 void facade_log_write(char *string);
 
+/** @brief Read one byte from the logging UART receive FIFO (non-blocking).
+ *
+ *  Received bytes are pushed into a ring buffer automatically by the UART RX
+ *  interrupt. This function pops one byte from that buffer.
+ *
+ *  @return The received byte (1-255), or 0 if the FIFO is empty.
+ */
+uint8_t facade_log_read_byte(void);
+
 /** @brief Print error string.
  *
  *  @note The log mechanism must be able to work at the highest priority level where error checks are done.
@@ -166,6 +175,34 @@ void facade_rx_conn_status(void);
 /** @brief Turn off all LEDs.
  */
 void facade_led_all_off(void);
+
+/** @brief Get the current system tick in milliseconds.
+ *
+ *  Used for non-blocking timeout calculations.
+ *
+ *  @return Current tick value in milliseconds.
+ */
+uint32_t facade_get_tick_ms(void);
+
+/** @brief Initialize the expansion UART (PA2=TX, PA3=RX, USART2, AF7).
+ *
+ *  Independent from facade_log_init(). Does not affect the STLink debug log.
+ *
+ *  @param[in] baud_rate  Baud rate (e.g. 115200).
+ */
+void facade_expansion_uart_init(uint32_t baud_rate);
+
+/** @brief Transmit a null-terminated string over the expansion UART (blocking).
+ *
+ *  @param[in] string  Null-terminated string to transmit.
+ */
+void facade_expansion_uart_write(char *string);
+
+/** @brief Read one byte from the expansion UART RX FIFO (non-blocking).
+ *
+ *  @return The received byte (1-255), or 0 if the FIFO is empty.
+ */
+uint8_t facade_expansion_uart_read_byte(void);
 
 #ifdef __cplusplus
 }

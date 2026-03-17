@@ -31,3 +31,16 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
         COMMAND arm-none-eabi-objcopy -O binary profiler_helper.elf profiler_helper.bin
     )
 endif()
+
+# UART RX test -- standalone echo test, no SWC/radio needed
+add_executable(uart_rx_test.elf "")
+target_sources(uart_rx_test.elf PRIVATE uart_rx_test.c)
+target_link_libraries(uart_rx_test.elf
+    PRIVATE
+        profiler_backend
+        swc
+)
+add_custom_command(TARGET uart_rx_test.elf
+    POST_BUILD
+    COMMAND arm-none-eabi-objcopy -O binary uart_rx_test.elf uart_rx_test.bin
+)

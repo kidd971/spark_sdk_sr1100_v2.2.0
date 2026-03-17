@@ -18,6 +18,7 @@
 #define IRQ_PRIORITY_TMER_PACKET_GENERATION (QUASAR_DEF_PRIO_PENDSV_IRQ + 1)
 #define TIMER_SELECTION_PACKET_GENERATION   QUASAR_TIMER_SELECTION_TIMER6
 #define SEC_TO_US                           ((double)1e6)
+#define EXPANSION_UART_TX_TIMEOUT_MS        1000
 
 /* PRIVATE GLOBALS ************************************************************/
 static uint32_t timestamp_begin;
@@ -80,6 +81,11 @@ void facade_log_init(void)
 void facade_log_write(char *string)
 {
     quasar_uart_transmit_blocking(QUASAR_DEF_UART_SELECTION_DEBUG, (uint8_t *)string, strlen(string), 1000);
+}
+
+uint8_t facade_log_read_byte(void)
+{
+    return quasar_uart_receive_irq(QUASAR_DEF_UART_SELECTION_DEBUG);
 }
 
 void facade_log_error_string(char *string)
@@ -180,4 +186,53 @@ void facade_led_all_off(void)
     quasar_led_clear(QUASAR_LED_USER_2);
     quasar_led_clear(QUASAR_LED_USER_3);
     quasar_led_clear(QUASAR_LED_USER_4);
+}
+
+uint32_t facade_get_tick_ms(void)
+{
+    return quasar_timer_get_ms_tick();
+}
+
+void facade_expansion_uart_init(uint32_t baud_rate)
+{
+    quasar_gpio_config_t gpio_tx = {
+        .port      = QUASAR_DEF_EXPANSION_UART_TX_PORT,
+        .pin       = QUASAR_DEF_EXPANSION_UART_TX_PIN,
+        .mode      = QUASAR_GPIO_MODE_ALTERNATE,
+        .type      = QUASAR_GPIO_TYPE_PP,
+        .pull      = QUASAR_GPIO_PULL_UP,
+        .speed     = QUASAR_GPIO_SPEED_LOW,
+        .alternate = QUASAR_GPIO_ALTERNATE_AF7,
+    };
+    quasar_gpio_config_t gpio_rx = {
+        .port      = QUASAR_DEF_EXPANSION_UART_RX_PORT,
+        .pin       = QUASAR_DEF_EXPANSION_UART_RX_PIN,
+        .mode      = QUASAR_GPIO_MODE_ALTERNATE,
+        .type      = QUASAR_GPIO_TYPE_OD,
+        .pull      = QUASAR_GPIO_PULL_UP,
+        .speed     = QUASAR_GPIO_SPEED_LOW,
+        .alternate = QUASAR_GPIO_ALTERNATE_AF7,
+    };
+    quasar_uart_config_t uart_cfg = {
+        .uart_selection = QUASAR_DEF_UART_SELECTION_EXPANSION,
+        .baud_rate      = baud_rate,
+        .parity         = QUASAR_UART_PARITY_NONE,
+        .stop           = QUASAR_UART_STOP_BITS_1B,
+        .irq_priority   = QUASAR_IRQ_PRIORITY_0,
+        .gpio_config_tx = gpio_tx,
+        .gpio_config_rx = gpio_rx,
+    };
+    quasar_uart_init(uart_cfg);
+}
+
+void facade_expansion_uart_write(char *string)
+{
+    quasar_uart_transmit_blocking(QUASAR_DEF_UART_SELECTION_EXPANSION,
+                                  (uint8_t *)string, strlen(string),
+                                  EXPANSION_UART_TX_TIMEOUT_MS);
+}
+
+uint8_t facade_expansion_uart_read_byte(void)
+{
+    return quasar_uart_receive_irq(QUASAR_DEF_UART_SELECTION_EXPANSION);
 }
