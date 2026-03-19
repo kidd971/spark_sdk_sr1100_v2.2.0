@@ -12,6 +12,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
             audio_core
             audio_unidirectional_backend
             swc
+            at_cmd_core
     )
     add_custom_command(TARGET audio_unidirectional_coordinator.elf
         POST_BUILD
@@ -26,6 +27,7 @@ target_link_libraries(audio_unidirectional_node.elf
         audio_core
         audio_unidirectional_backend
         swc
+        at_cmd_core
 )
 add_custom_command(TARGET audio_unidirectional_node.elf
     POST_BUILD

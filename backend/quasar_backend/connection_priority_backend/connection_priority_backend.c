@@ -8,6 +8,7 @@
  */
 
 /* INCLUDES *******************************************************************/
+#include <string.h>
 #include "connection_priority_facade.h"
 #include "quasar.h"
 #include "tinyusb_baremetal.h"
@@ -315,4 +316,51 @@ static void handle_button_state(button_handle_t *button_handle, void (*button_ca
             button_handle->active = false;
         }
     }
+}
+
+/* EXPANSION UART (USART2, PA2=TX / PA3=RX) — used by AT command core ********/
+#define EXPANSION_UART_TX_TIMEOUT_MS 1000
+
+void facade_expansion_uart_init(uint32_t baud_rate)
+{
+    quasar_gpio_config_t gpio_tx = {
+        .port      = QUASAR_DEF_EXPANSION_UART_TX_PORT,
+        .pin       = QUASAR_DEF_EXPANSION_UART_TX_PIN,
+        .mode      = QUASAR_GPIO_MODE_ALTERNATE,
+        .type      = QUASAR_GPIO_TYPE_PP,
+        .pull      = QUASAR_GPIO_PULL_UP,
+        .speed     = QUASAR_GPIO_SPEED_LOW,
+        .alternate = QUASAR_GPIO_ALTERNATE_AF7,
+    };
+    quasar_gpio_config_t gpio_rx = {
+        .port      = QUASAR_DEF_EXPANSION_UART_RX_PORT,
+        .pin       = QUASAR_DEF_EXPANSION_UART_RX_PIN,
+        .mode      = QUASAR_GPIO_MODE_ALTERNATE,
+        .type      = QUASAR_GPIO_TYPE_OD,
+        .pull      = QUASAR_GPIO_PULL_UP,
+        .speed     = QUASAR_GPIO_SPEED_LOW,
+        .alternate = QUASAR_GPIO_ALTERNATE_AF7,
+    };
+    quasar_uart_config_t uart_cfg = {
+        .uart_selection = QUASAR_DEF_UART_SELECTION_EXPANSION,
+        .baud_rate      = baud_rate,
+        .parity         = QUASAR_UART_PARITY_NONE,
+        .stop           = QUASAR_UART_STOP_BITS_1B,
+        .irq_priority   = QUASAR_IRQ_PRIORITY_0,
+        .gpio_config_tx = gpio_tx,
+        .gpio_config_rx = gpio_rx,
+    };
+    quasar_uart_init(uart_cfg);
+}
+
+void facade_expansion_uart_write(char *string)
+{
+    quasar_uart_transmit_blocking(QUASAR_DEF_UART_SELECTION_EXPANSION,
+                                  (uint8_t *)string, strlen(string),
+                                  EXPANSION_UART_TX_TIMEOUT_MS);
+}
+
+uint8_t facade_expansion_uart_read_byte(void)
+{
+    return quasar_uart_receive_irq(QUASAR_DEF_UART_SELECTION_EXPANSION);
 }

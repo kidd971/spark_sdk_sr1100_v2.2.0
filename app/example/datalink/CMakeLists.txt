@@ -12,6 +12,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
             swc
             library_dataforge
             datalink_backend
+            at_cmd_core
     )
     add_custom_command(TARGET datalink_coordinator.elf
         POST_BUILD
@@ -26,6 +27,7 @@ target_link_libraries(datalink_node.elf
         swc
         library_dataforge
         datalink_backend
+        at_cmd_core
 )
 add_custom_command(TARGET datalink_node.elf
     POST_BUILD

@@ -12,6 +12,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
             swc
             fragmentation_backend
             pseudo_data
+            at_cmd_core
     )
     add_custom_command(TARGET fragmentation_coordinator.elf
         POST_BUILD
@@ -26,6 +27,7 @@ target_link_libraries(fragmentation_node.elf
         swc
         fragmentation_backend
         pseudo_data
+        at_cmd_core
 )
 add_custom_command(TARGET fragmentation_node.elf
     POST_BUILD

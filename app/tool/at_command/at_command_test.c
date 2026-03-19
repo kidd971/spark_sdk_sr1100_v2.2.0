@@ -21,7 +21,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
-#include "at_module.h"
+#include "at_module.h"        /* library/at_module */
 #include "profiler_facade.h"
 
 /* CONSTANTS ******************************************************************/

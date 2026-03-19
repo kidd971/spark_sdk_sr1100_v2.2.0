@@ -165,6 +165,26 @@ void facade_packet_generation_timer_stop(void);
  */
 uint32_t facade_get_tick_ms(void);
 
+/** @brief Initialize the expansion UART (USART2, PA2=TX / PA3=RX).
+ *
+ *  Independent from the STLink debug log UART. Used by the AT command core.
+ *
+ *  @param[in] baud_rate  Baud rate (e.g. 115200).
+ */
+void facade_expansion_uart_init(uint32_t baud_rate);
+
+/** @brief Transmit a null-terminated string over the expansion UART (blocking).
+ *
+ *  @param[in] string  Null-terminated string to transmit.
+ */
+void facade_expansion_uart_write(char *string);
+
+/** @brief Read one byte from the expansion UART RX FIFO (non-blocking).
+ *
+ *  @return The received byte (1-255), or 0 if the FIFO is empty.
+ */
+uint8_t facade_expansion_uart_read_byte(void);
+
 #ifdef __cplusplus
 }
 #endif

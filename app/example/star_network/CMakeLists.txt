@@ -11,6 +11,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
         PRIVATE
             star_network_backend
             swc
+            at_cmd_core
     )
     add_custom_command(TARGET star_network_coordinator.elf
         POST_BUILD
@@ -24,6 +25,7 @@ target_link_libraries(star_network_node1.elf
     PRIVATE
         star_network_backend
         swc
+        at_cmd_core
 )
 target_compile_definitions(star_network_node1.elf PRIVATE NODE1)
 add_custom_command(TARGET star_network_node1.elf
@@ -37,6 +39,7 @@ target_link_libraries(star_network_node2.elf
     PRIVATE
         star_network_backend
         swc
+        at_cmd_core
 )
 target_compile_definitions(star_network_node2.elf PRIVATE NODE2)
 add_custom_command(TARGET star_network_node2.elf

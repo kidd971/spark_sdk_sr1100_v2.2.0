@@ -13,6 +13,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
             swc
             cmsis_rtos_v2
             module_tinyusb_freertos
+            at_cmd_core
     )
     add_custom_command(TARGET hello_world_rtos_coordinator.elf
         POST_BUILD
@@ -28,6 +29,7 @@ target_link_libraries(hello_world_rtos_node.elf
         swc
         cmsis_rtos_v2
         module_tinyusb_freertos
+        at_cmd_core
 )
 add_custom_command(TARGET hello_world_rtos_node.elf
     POST_BUILD

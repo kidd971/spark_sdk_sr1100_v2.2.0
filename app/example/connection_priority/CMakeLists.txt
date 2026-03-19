@@ -11,6 +11,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
         PRIVATE
             connection_priority_backend
             swc
+            at_cmd_core
     )
     add_custom_command(TARGET connection_priority_coordinator.elf
         POST_BUILD
@@ -24,6 +25,7 @@ target_link_libraries(connection_priority_node.elf
     PRIVATE
         connection_priority_backend
         swc
+        at_cmd_core
 )
 target_compile_definitions(connection_priority_node.elf PRIVATE NODE)
 add_custom_command(TARGET connection_priority_node.elf

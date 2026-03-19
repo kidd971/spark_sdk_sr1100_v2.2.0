@@ -11,6 +11,7 @@ if (NOT MULTI_TRANSCEIVER STREQUAL "DUAL_TRANSCEIVER")
         PRIVATE
             hello_world_backend
             swc
+            at_cmd_core
     )
     add_custom_command(TARGET hello_world_coordinator.elf
         POST_BUILD
@@ -24,6 +25,7 @@ target_link_libraries(hello_world_node.elf
     PRIVATE
         hello_world_backend
 	    swc
+        at_cmd_core
 )
 add_custom_command(TARGET hello_world_node.elf
     POST_BUILD

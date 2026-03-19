@@ -1,4 +1,5 @@
 add_subdirectory(adpcm)
+add_subdirectory(at_module)
 add_subdirectory(buffer)
 add_subdirectory(crc)
 add_subdirectory(critical_section)
