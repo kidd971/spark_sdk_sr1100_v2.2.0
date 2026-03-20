@@ -19,6 +19,6 @@
 /* The application code prevents unwanted devices from pairing with this application. */
 #define PAIRING_APP_CODE 0x0000000000000111
 /* The timeout in seconds after which the pairing procedure will abort. */
-#define PAIRING_TIMEOUT_IN_SECONDS 10
+#define PAIRING_TIMEOUT_IN_SECONDS 5// 10 //3
 
 #endif /* PAIRING_CFG_H_ */

@@ -33,6 +33,7 @@
 #include "swc_cfg.h"
 #include "swc_cfg_node.h"
 #include "swc_stats.h"
+#include "at_cmd_core.h"
 
 /* CONSTANTS ******************************************************************/
 /* Total memory needed for the Audio Core. */
@@ -173,6 +174,8 @@ static pairing_assigned_address_t pairing_assigned_address;
 /* PRIVATE FUNCTION PROTOTYPE *************************************************/
 static void app_init(void);
 static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error_t *swc_err);
+static bool app_get_link_status(void);
+static void app_start_pairing(void);
 static void app_audio_core_init(void);
 
 /* **** Callbacks **** */
@@ -224,6 +227,10 @@ int main(void)
     /* Initialize the board and all GPIOs and peripherals for minimal operations. */
     facade_board_init();
 
+    /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
+    at_cmd_core_init();
+    at_cmd_core_register_pair_cb(app_start_pairing);
+
     /* Initialize wireless core context switch handler before pairing is available */
     facade_set_context_switch_handler(swc_connection_callbacks_processing_handler);
 
@@ -250,6 +257,9 @@ int main(void)
 
     device_pairing_state = DEVICE_UNPAIRED;
 
+    /* Notify external MCU that UWB initialization is complete. */
+    at_cmd_core_notify_uwb_ready();
+
     /* Pairing occurs automatically when the device boots. */
     enter_pairing_mode();
 
@@ -269,6 +279,9 @@ int main(void)
             while (1);
             break;
         }
+
+        /* Drive AT command state machine. */
+        at_cmd_core_process();
 
         /* Statistics are displayed at intervals set by the timer when paired; timer stops if unpaired. */
         if (should_print_stats()) {
@@ -1296,6 +1309,7 @@ static void enter_pairing_mode(void)
     pairing_event_t pairing_event = PAIRING_EVENT_NONE;
 
     facade_notify_enter_pairing();
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_PAIRING);
 
     /* The wireless core must be stopped before starting the pairing procedure. */
     if (swc_get_status() == SWC_STATUS_RUNNING) {
@@ -1325,6 +1339,8 @@ static void enter_pairing_mode(void)
 
         app_init();
         device_pairing_state = DEVICE_PAIRED;
+        at_cmd_core_register_link_status_cb(app_get_link_status);
+        at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
 
         break;
     case PAIRING_EVENT_TIMEOUT:
@@ -1334,6 +1350,7 @@ static void enter_pairing_mode(void)
         /* Indicate that the pairing process was unsuccessful. */
         facade_notify_not_paired();
         device_pairing_state = DEVICE_UNPAIRED;
+        at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_STANDBY);
         break;
     }
 }
@@ -1346,6 +1363,8 @@ static void unpair_device(void)
     sac_status_t sac_status = SAC_OK;
 
     device_pairing_state = DEVICE_UNPAIRED;
+    at_cmd_core_register_link_status_cb(NULL);
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_STANDBY);
 
     /* Stop timers. */
     facade_audio_process_main_channel_timer_stop();
@@ -1507,4 +1526,25 @@ void swc_error_handler(swc_error_t swc_status)
     facade_print_error_string(buffer);
 
     while (1);
+}
+
+/** @brief Link status getter polled by at_cmd_core_process(). */
+static bool app_get_link_status(void)
+{
+    swc_error_t swc_err = SWC_ERR_NONE;
+
+    return swc_connection_get_connect_status(rx_audio_conn, &swc_err);
+}
+
+/** @brief Pair callback registered with at_cmd_core.
+ *
+ *  If the device is currently paired, unpair cleanly first to stop audio
+ *  timers and SAC pipelines before entering the pairing procedure.
+ */
+static void app_start_pairing(void)
+{
+    if (device_pairing_state == DEVICE_PAIRED) {
+        unpair_device();
+    }
+    enter_pairing_mode();
 }
