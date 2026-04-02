@@ -374,6 +374,12 @@ void facade_system_reset(void)
     quasar_system_reset();
 }
 
+void facade_set_i2s_mux(bool use_ext)
+{
+    quasar_audio_set_i2s_mux_selection(use_ext ? QUASAR_SELECT_EXT_CODEC
+                                                : QUASAR_SELECT_ON_BOARD_CODEC);
+}
+
 bool facade_read_button_state(void)
 {
     return quasar_button_read_state(QUASAR_BUTTON_USER_2);

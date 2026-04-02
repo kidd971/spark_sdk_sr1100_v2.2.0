@@ -109,6 +109,19 @@ void at_cmd_core_register_link_status_cb(bool (*cb)(void));
 void at_cmd_core_register_pair_cb(void (*cb)(void));
 
 /**
+ * @brief Register a callback invoked when AT+I2S_MUX is received.
+ *
+ * The callback receives the new selection (false = ON_BOARD, true = EXT) and
+ * should apply it to hardware (e.g. quasar_audio_set_i2s_mux_selection()).
+ * The command toggles the selection on each call and replies with the new state.
+ * If no callback is registered the command still toggles the tracked state
+ * but does not touch hardware.
+ *
+ * @param[in] cb  Function accepting new selection. May be NULL to unregister.
+ */
+void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext));
+
+/**
  * @brief Register a link margin getter polled by AT+CONN_LM?.
  *
  * The callback should call swc_connection_update_stats() on the application's

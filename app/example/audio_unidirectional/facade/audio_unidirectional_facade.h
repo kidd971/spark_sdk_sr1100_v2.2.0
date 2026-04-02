@@ -261,6 +261,12 @@ void facade_expansion_uart_write(char *string);
  */
 uint8_t facade_expansion_uart_read_byte(void);
 
+/** @brief Set the I2S MUX selection.
+ *
+ *  @param[in] use_ext  false = ON_BOARD codec, true = EXT codec.
+ */
+void facade_set_i2s_mux(bool use_ext);
+
 #ifdef __cplusplus
 }
 #endif

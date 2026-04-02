@@ -22,6 +22,7 @@ static bool handler_uwb_pair(const char *args, char *resp, uint16_t resp_size);
 static bool handler_fw_version(const char *args, char *resp, uint16_t resp_size);
 static bool handler_module_reset(const char *args, char *resp, uint16_t resp_size);
 static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size);
+static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size);
 
 /* PRIVATE VARIABLES **********************************************************/
 static uint8_t              s_device_address   = 0xFF;
@@ -29,6 +30,8 @@ static at_uwb_conn_status_t s_uwb_conn_status  = AT_UWB_CONN_STATUS_STANDBY;
 static void               (*s_pair_cb)(void)    = NULL;
 static bool               (*s_link_status_cb)(void) = NULL;
 static int32_t            (*s_link_margin_cb)(void) = NULL;
+static void               (*s_i2s_mux_cb)(bool use_ext) = NULL;
+static bool                 s_i2s_mux_is_ext   = false;
 static bool                 s_pair_requested   = false;
 static bool                 s_reset_requested  = false;
 
@@ -54,6 +57,7 @@ void at_cmd_core_init(void)
     at_server_register("UWB_PAIR",        handler_uwb_pair);
     at_server_register("FW_VERSION",      handler_fw_version);
     at_server_register("CONN_LM",         handler_conn_lm);
+    at_server_register("I2S_MUX",         handler_i2s_mux);
 }
 
 void at_cmd_core_register_link_status_cb(bool (*cb)(void))
@@ -64,6 +68,11 @@ void at_cmd_core_register_link_status_cb(bool (*cb)(void))
 void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void))
 {
     s_link_margin_cb = cb;
+}
+
+void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext))
+{
+    s_i2s_mux_cb = cb;
 }
 
 void at_cmd_core_notify_uwb_ready(void)
@@ -205,6 +214,18 @@ static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size)
     return true;
 }
 
+/** @brief AT+I2S_MUX — toggle I2S MUX between ON_BOARD and EXT codec. */
+static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    s_i2s_mux_is_ext = !s_i2s_mux_is_ext;
+    if (s_i2s_mux_cb != NULL) {
+        s_i2s_mux_cb(s_i2s_mux_is_ext);
+    }
+    snprintf(resp, resp_size, "+I2S_MUX: %s", s_i2s_mux_is_ext ? "EXT" : "ON_BOARD");
+    return true;
+}
+
 /** @brief AT+HELP — list all registered AT commands. */
 static bool handler_help(const char *args, char *resp, uint16_t resp_size)
 {
@@ -222,6 +243,7 @@ static bool handler_help(const char *args, char *resp, uint16_t resp_size)
         "  AT+UWB_PAIR\r\n",
         "  AT+MODULE_RESET\r\n",
         "  AT+CONN_LM?\r\n",
+        "  AT+I2S_MUX\r\n",
     };
 
     facade_expansion_uart_write("+HELP:\r\n");

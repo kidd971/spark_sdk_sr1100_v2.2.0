@@ -177,6 +177,7 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
 static int32_t app_get_link_margin(void);
+static void app_set_i2s_mux(bool use_ext);
 static void app_audio_core_init(void);
 
 /* **** Callbacks **** */
@@ -231,6 +232,7 @@ int main(void)
     /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
     at_cmd_core_init();
     at_cmd_core_register_pair_cb(app_start_pairing);
+    at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
 
     /* Initialize wireless core context switch handler before pairing is available */
     facade_set_context_switch_handler(swc_connection_callbacks_processing_handler);
@@ -1546,6 +1548,12 @@ static int32_t app_get_link_margin(void)
     swc_statistics_t *stats = swc_connection_update_stats(rx_audio_conn, &swc_err);
 
     return (int32_t)stats->link_margin_avg / 10;
+}
+
+/** @brief I2S MUX setter called by AT+I2S_MUX. */
+static void app_set_i2s_mux(bool use_ext)
+{
+    facade_set_i2s_mux(use_ext);
 }
 
 /** @brief Pair callback registered with at_cmd_core.
