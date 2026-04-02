@@ -119,6 +119,8 @@ void facade_audio_node_init(void)
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
+    /* Route I2S output to expansion port header pins instead of on-board codec. */
+    //quasar_audio_set_i2s_mux_selection(QUASAR_SELECT_EXT_CODEC);
 
     max98091_codec_cfg_t cfg = {
         .sampling_rate = MAX98091_AUDIO_48KHZ,
@@ -365,6 +367,11 @@ void facade_led_all_off(void)
 uint32_t facade_get_tick_ms(void)
 {
     return quasar_timer_free_running_ms_get_tick_count();
+}
+
+void facade_system_reset(void)
+{
+    quasar_system_reset();
 }
 
 bool facade_read_button_state(void)

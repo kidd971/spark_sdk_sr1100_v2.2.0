@@ -176,6 +176,7 @@ static void app_init(void);
 static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error_t *swc_err);
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
+static int32_t app_get_link_margin(void);
 static void app_audio_core_init(void);
 
 /* **** Callbacks **** */
@@ -1340,6 +1341,7 @@ static void enter_pairing_mode(void)
         app_init();
         device_pairing_state = DEVICE_PAIRED;
         at_cmd_core_register_link_status_cb(app_get_link_status);
+        at_cmd_core_register_link_margin_cb(app_get_link_margin);
         at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
 
         break;
@@ -1364,6 +1366,7 @@ static void unpair_device(void)
 
     device_pairing_state = DEVICE_UNPAIRED;
     at_cmd_core_register_link_status_cb(NULL);
+    at_cmd_core_register_link_margin_cb(NULL);
     at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_STANDBY);
 
     /* Stop timers. */
@@ -1534,6 +1537,15 @@ static bool app_get_link_status(void)
     swc_error_t swc_err = SWC_ERR_NONE;
 
     return swc_connection_get_connect_status(rx_audio_conn, &swc_err);
+}
+
+/** @brief Link margin getter called by AT+CONN_LM?. Returns value in dB. */
+static int32_t app_get_link_margin(void)
+{
+    swc_error_t swc_err = SWC_ERR_NONE;
+    swc_statistics_t *stats = swc_connection_update_stats(rx_audio_conn, &swc_err);
+
+    return (int32_t)stats->link_margin_avg / 10;
 }
 
 /** @brief Pair callback registered with at_cmd_core.

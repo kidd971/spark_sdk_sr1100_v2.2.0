@@ -193,6 +193,11 @@ uint32_t facade_get_tick_ms(void)
     return quasar_timer_get_ms_tick();
 }
 
+void facade_system_reset(void)
+{
+    quasar_system_reset();
+}
+
 void facade_expansion_uart_init(uint32_t baud_rate)
 {
     quasar_gpio_config_t gpio_tx = {

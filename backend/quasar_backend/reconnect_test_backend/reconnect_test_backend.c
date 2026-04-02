@@ -183,6 +183,11 @@ uint32_t facade_get_tick_ms(void)
     return quasar_timer_free_running_ms_get_tick_count();
 }
 
+void facade_system_reset(void)
+{
+    quasar_system_reset();
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 /** @brief Turn off all LEDs.
  */

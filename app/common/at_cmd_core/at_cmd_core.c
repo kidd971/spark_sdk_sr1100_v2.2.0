@@ -20,13 +20,17 @@ static bool handler_module_info(const char *args, char *resp, uint16_t resp_size
 static bool handler_uwb_conn_status(const char *args, char *resp, uint16_t resp_size);
 static bool handler_uwb_pair(const char *args, char *resp, uint16_t resp_size);
 static bool handler_fw_version(const char *args, char *resp, uint16_t resp_size);
+static bool handler_module_reset(const char *args, char *resp, uint16_t resp_size);
+static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size);
 
 /* PRIVATE VARIABLES **********************************************************/
 static uint8_t              s_device_address   = 0xFF;
 static at_uwb_conn_status_t s_uwb_conn_status  = AT_UWB_CONN_STATUS_STANDBY;
 static void               (*s_pair_cb)(void)    = NULL;
 static bool               (*s_link_status_cb)(void) = NULL;
+static int32_t            (*s_link_margin_cb)(void) = NULL;
 static bool                 s_pair_requested   = false;
+static bool                 s_reset_requested  = false;
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 void at_cmd_core_init(void)
@@ -38,17 +42,28 @@ void at_cmd_core_init(void)
                    facade_get_tick_ms);
 
     at_server_register("VER",    handler_ver);
-    at_server_register("HELP",   handler_help);
+
     at_server_register("PING",        handler_ping);
+    at_server_register("HELP",   handler_help);
+    at_server_register("MODULE_RESET",    handler_module_reset);
     at_server_register("MODULE_INFO",    handler_module_info);
+
     at_server_register("UWB_CONN_STATUS", handler_uwb_conn_status);
+
+
     at_server_register("UWB_PAIR",        handler_uwb_pair);
     at_server_register("FW_VERSION",      handler_fw_version);
+    at_server_register("CONN_LM",         handler_conn_lm);
 }
 
 void at_cmd_core_register_link_status_cb(bool (*cb)(void))
 {
     s_link_status_cb = cb;
+}
+
+void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void))
+{
+    s_link_margin_cb = cb;
 }
 
 void at_cmd_core_notify_uwb_ready(void)
@@ -81,6 +96,12 @@ void at_cmd_core_process(void)
         if (s_pair_cb != NULL) {
             s_pair_cb();
         }
+    }
+
+    /* Reset MCU deferred — after at_module_process() has sent OK. */
+    if (s_reset_requested) {
+        s_reset_requested = false;
+        facade_system_reset();
     }
 
     if (s_link_status_cb == NULL || s_uwb_conn_status == AT_UWB_CONN_STATUS_PAIRING) {
@@ -163,6 +184,27 @@ static bool handler_uwb_pair(const char *args, char *resp, uint16_t resp_size)
     return true;
 }
 
+/** @brief AT+MODULE_RESET — reset the UWB module MCU. */
+static bool handler_module_reset(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    s_reset_requested = true;
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+CONN_LM? — report UWB link margin in dB. */
+static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    if (s_link_margin_cb == NULL) {
+        snprintf(resp, resp_size, "+CONN_LM: N/A");
+        return true;
+    }
+    snprintf(resp, resp_size, "+CONN_LM: %ddB", (int)s_link_margin_cb());
+    return true;
+}
+
 /** @brief AT+HELP — list all registered AT commands. */
 static bool handler_help(const char *args, char *resp, uint16_t resp_size)
 {
@@ -178,6 +220,8 @@ static bool handler_help(const char *args, char *resp, uint16_t resp_size)
         "  AT+MODULE_INFO?\r\n",
         "  AT+UWB_CONN_STATUS?\r\n",
         "  AT+UWB_PAIR\r\n",
+        "  AT+MODULE_RESET\r\n",
+        "  AT+CONN_LM?\r\n",
     };
 
     facade_expansion_uart_write("+HELP:\r\n");

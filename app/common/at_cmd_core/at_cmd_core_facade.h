@@ -38,6 +38,12 @@ uint8_t facade_expansion_uart_read_byte(void);
  */
 uint32_t facade_get_tick_ms(void);
 
+/** @brief Perform a system reset (MCU reboot).
+ *
+ *  Called after the AT response has been flushed. Does not return.
+ */
+void facade_system_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

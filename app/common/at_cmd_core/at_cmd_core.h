@@ -108,6 +108,18 @@ void at_cmd_core_register_link_status_cb(bool (*cb)(void));
  */
 void at_cmd_core_register_pair_cb(void (*cb)(void));
 
+/**
+ * @brief Register a link margin getter polled by AT+CONN_LM?.
+ *
+ * The callback should call swc_connection_update_stats() on the application's
+ * primary RX connection and return the link margin in whole dB
+ * (i.e. stats->link_margin_avg / 10, cast to int32_t).
+ * Set to NULL to unregister (e.g. on unpair); the command then returns N/A.
+ *
+ * @param[in] cb  Function returning link margin in dB. May be NULL to unregister.
+ */
+void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif
