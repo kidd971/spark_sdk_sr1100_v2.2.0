@@ -82,6 +82,7 @@ static void enter_pairing_mode(void);
 static void unpair_device(void);
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
+static void app_start_connect(void);
 static int32_t app_get_link_margin(void);
 
 static void pairing_application_callback(void);
@@ -96,6 +97,7 @@ int main(void)
     /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
     at_cmd_core_init();
     at_cmd_core_register_pair_cb(app_start_pairing);
+    at_cmd_core_register_connect_cb(app_start_connect);
 
     /* Initialize wireless core context switch handler before pairing is available */
     facade_set_context_switch_handler(swc_connection_callbacks_processing_handler);
@@ -557,4 +559,25 @@ static void app_start_pairing(void)
         unpair_device();
     }
     enter_pairing_mode();
+}
+
+/** @brief Connect callback registered with at_cmd_core.
+ *
+ *  Re-establishes the UWB connection using the stored pairing address without
+ *  going through the pairing procedure. No-op if already paired or if no
+ *  pairing address is available.
+ */
+static void app_start_connect(void)
+{
+    if (device_pairing_state == DEVICE_PAIRED) {
+        return;
+    }
+    if (pairing_assigned_address.pan_id == 0) {
+        return; /* Never paired — no address to connect to. */
+    }
+    app_init();
+    device_pairing_state = DEVICE_PAIRED;
+    at_cmd_core_register_link_status_cb(app_get_link_status);
+    at_cmd_core_register_link_margin_cb(app_get_link_margin);
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
 }

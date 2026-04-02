@@ -23,6 +23,7 @@ static bool handler_fw_version(const char *args, char *resp, uint16_t resp_size)
 static bool handler_module_reset(const char *args, char *resp, uint16_t resp_size);
 static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size);
 static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size);
+static bool handler_uwb_connect(const char *args, char *resp, uint16_t resp_size);
 
 /* PRIVATE VARIABLES **********************************************************/
 static uint8_t              s_device_address   = 0xFF;
@@ -31,9 +32,11 @@ static void               (*s_pair_cb)(void)    = NULL;
 static bool               (*s_link_status_cb)(void) = NULL;
 static int32_t            (*s_link_margin_cb)(void) = NULL;
 static void               (*s_i2s_mux_cb)(bool use_ext) = NULL;
+static void               (*s_connect_cb)(void)         = NULL;
 static bool                 s_i2s_mux_is_ext   = false;
 static bool                 s_pair_requested   = false;
 static bool                 s_reset_requested  = false;
+static bool                 s_connect_requested = false;
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 void at_cmd_core_init(void)
@@ -58,6 +61,7 @@ void at_cmd_core_init(void)
     at_server_register("FW_VERSION",      handler_fw_version);
     at_server_register("CONN_LM",         handler_conn_lm);
     at_server_register("I2S_MUX",         handler_i2s_mux);
+    at_server_register("UWB_CONNECT",     handler_uwb_connect);
 }
 
 void at_cmd_core_register_link_status_cb(bool (*cb)(void))
@@ -73,6 +77,11 @@ void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void))
 void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext))
 {
     s_i2s_mux_cb = cb;
+}
+
+void at_cmd_core_register_connect_cb(void (*cb)(void))
+{
+    s_connect_cb = cb;
 }
 
 void at_cmd_core_notify_uwb_ready(void)
@@ -111,6 +120,14 @@ void at_cmd_core_process(void)
     if (s_reset_requested) {
         s_reset_requested = false;
         facade_system_reset();
+    }
+
+    /* Invoke connect callback deferred — after at_module_process() has sent OK. */
+    if (s_connect_requested) {
+        s_connect_requested = false;
+        if (s_connect_cb != NULL) {
+            s_connect_cb();
+        }
     }
 
     if (s_link_status_cb == NULL || s_uwb_conn_status == AT_UWB_CONN_STATUS_PAIRING) {
@@ -226,6 +243,15 @@ static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size)
     return true;
 }
 
+/** @brief AT+UWB_CONNECT — re-establish UWB connection using stored pairing address. */
+static bool handler_uwb_connect(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    s_connect_requested = true;
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
 /** @brief AT+HELP — list all registered AT commands. */
 static bool handler_help(const char *args, char *resp, uint16_t resp_size)
 {
@@ -244,6 +270,7 @@ static bool handler_help(const char *args, char *resp, uint16_t resp_size)
         "  AT+MODULE_RESET\r\n",
         "  AT+CONN_LM?\r\n",
         "  AT+I2S_MUX\r\n",
+        "  AT+UWB_CONNECT\r\n",
     };
 
     facade_expansion_uart_write("+HELP:\r\n");

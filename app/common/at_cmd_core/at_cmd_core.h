@@ -133,6 +133,18 @@ void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext));
  */
 void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void));
 
+/**
+ * @brief Register a callback invoked when AT+UWB_CONNECT is received.
+ *
+ * The callback should attempt to re-establish the UWB connection using the
+ * previously assigned pairing addresses, without entering the pairing procedure.
+ * If the device is already connected the callback should be a no-op.
+ * If no pairing address is available the callback should do nothing.
+ *
+ * @param[in] cb  Function to call on AT+UWB_CONNECT. May be NULL to unregister.
+ */
+void at_cmd_core_register_connect_cb(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif
