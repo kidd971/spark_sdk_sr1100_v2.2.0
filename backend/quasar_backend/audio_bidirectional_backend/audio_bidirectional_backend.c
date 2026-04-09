@@ -127,7 +127,7 @@ void facade_audio_node_init(void)
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
     /* Route I2S output to expansion port header pins instead of on-board codec. */
-    quasar_audio_set_i2s_mux_selection(QUASAR_SELECT_EXT_CODEC);
+    //quasar_audio_set_i2s_mux_selection(QUASAR_SELECT_EXT_CODEC);
 
     max98091_codec_cfg_t cfg = {
         .sampling_rate = MAX98091_AUDIO_48KHZ,
@@ -412,6 +412,26 @@ void facade_set_i2s_mux(bool use_ext)
 bool facade_read_button_state(void)
 {
     return quasar_button_read_state(QUASAR_BUTTON_USER_2);
+}
+
+uint8_t facade_read_battery_level(void)
+{
+    static bool conversion_started = false;
+    static uint16_t last_mv = 0;
+
+    if (!conversion_started) {
+        /* First call — kick off the initial conversion. */
+        quasar_adc_start_conversion_it(QUASAR_DEF_ADC_SELECTION_BATTERY_VOLTAGE);
+        conversion_started = true;
+    } else if (quasar_adc_is_battery_level_value_ready()) {
+        /* Result ready — read it and start the next conversion. */
+        last_mv = quasar_adc_get_battery_level_mv_it();
+        quasar_adc_start_conversion_it(QUASAR_DEF_ADC_SELECTION_BATTERY_VOLTAGE);
+    }
+
+    if (last_mv >= 4200) return 100;
+    if (last_mv <= 3000) return 0;
+    return (uint8_t)((last_mv - 3000) * 100 / 1200);
 }
 
 /* PRIVATE FUNCTIONS **********************************************************/

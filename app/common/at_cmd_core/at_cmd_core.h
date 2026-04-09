@@ -214,6 +214,18 @@ void at_cmd_core_notify_vol_received(uint8_t vol);
 void at_cmd_core_set_battery_level(uint8_t level);
 
 /**
+ * @brief Register a callback that reads the local battery level (HS side only).
+ *
+ * When registered, AT+BATTERY? calls this callback directly instead of
+ * returning the cached value. Use on HS (node) to report its own battery.
+ * DG (coordinator) should NOT register this — it returns the cached value
+ * received from HS over the UWB data channel.
+ *
+ * @param[in] cb  Function returning battery level 0–100. May be NULL to unregister.
+ */
+void at_cmd_core_register_battery_cb(uint8_t (*cb)(void));
+
+/**
  * @brief Register a callback invoked when AT+UWB_SHUTDOWN is received.
  *
  * The callback should perform software cleanup (stop timers, call swc_disconnect,

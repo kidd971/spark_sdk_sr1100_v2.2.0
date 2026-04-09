@@ -49,6 +49,7 @@ static void               (*s_cmd_tx_cb)(uint8_t cmd_type, uint8_t value) = NULL
 static void               (*s_vol_hw_cb)(uint8_t vol)                    = NULL;
 static void               (*s_disconnect_cb)(void)      = NULL;
 static void               (*s_shutdown_cb)(void)        = NULL;
+static uint8_t            (*s_battery_cb)(void)         = NULL;
 static bool                 s_i2s_mux_is_ext   = false;
 static bool                 s_pair_requested   = false;
 static bool                 s_reset_requested  = false;
@@ -134,6 +135,11 @@ void at_cmd_core_notify_vol_received(uint8_t vol)
 void at_cmd_core_set_battery_level(uint8_t level)
 {
     s_battery_level = level;
+}
+
+void at_cmd_core_register_battery_cb(uint8_t (*cb)(void))
+{
+    s_battery_cb = cb;
 }
 
 void at_cmd_core_register_connect_cb(void (*cb)(void))
@@ -446,7 +452,8 @@ static bool handler_play(const char *args, char *resp, uint16_t resp_size)
 static bool handler_battery(const char *args, char *resp, uint16_t resp_size)
 {
     (void)args;
-    snprintf(resp, resp_size, "+BATTERY: %d", (int)s_battery_level);
+    uint8_t level = (s_battery_cb != NULL) ? s_battery_cb() : s_battery_level;
+    snprintf(resp, resp_size, "+BATTERY: %d", (int)level);
     return true;
 }
 

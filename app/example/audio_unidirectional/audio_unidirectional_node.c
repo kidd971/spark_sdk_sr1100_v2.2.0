@@ -122,6 +122,7 @@ static facade_certification_mode_t certification_mode;
 static device_pairing_state_t device_pairing_state;
 static pairing_cfg_t app_pairing_cfg;
 static pairing_assigned_address_t pairing_assigned_address;
+static uint8_t s_battery_level_cache = 0;
 
 /* PRIVATE FUNCTION PROTOTYPE *************************************************/
 static void app_init(void);
@@ -182,6 +183,7 @@ int main(void)
     at_cmd_core_register_shutdown_cb(app_start_shutdown);
     at_cmd_core_register_vol_cb(app_set_volume);
     at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
+    at_cmd_core_register_battery_cb(facade_read_battery_level);
 
     /* Initialize wireless core context switch handler before pairing is available */
     facade_set_context_switch_handler(swc_connection_callbacks_processing_handler);
@@ -230,6 +232,9 @@ int main(void)
             while (1);
             break;
         }
+
+        /* Refresh battery level cache in main loop context (ADC polling must not run in ISR). */
+        //s_battery_level_cache = facade_read_battery_level();
 
         /* Drive AT command state machine. */
         at_cmd_core_process();
@@ -527,11 +532,11 @@ static void data_callback(void)
 
     /* Send battery level to DG every ~30 s (data_callback fires every 10 ms). */
 #define BATTERY_REPORT_INTERVAL_COUNT 3000
-    static uint16_t battery_tick = 0;
+    static uint16_t battery_tick = BATTERY_REPORT_INTERVAL_COUNT - 100;
 
     if (++battery_tick >= BATTERY_REPORT_INTERVAL_COUNT) {
         battery_tick = 0;
-        app_cmd_t batt_cmd = {CMD_BATTERY, 100 /* TODO: facade_read_battery_level() */};
+        app_cmd_t batt_cmd = {CMD_BATTERY, s_battery_level_cache};
         wireless_send_data(&batt_cmd, sizeof(batt_cmd), &swc_err);
     }
 }

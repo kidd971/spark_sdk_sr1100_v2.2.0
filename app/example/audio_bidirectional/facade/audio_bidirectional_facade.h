@@ -248,6 +248,7 @@ uint32_t facade_get_tick_ms(void);
  *  @return Returns true if the button is pressed, false otherwise.
  */
 bool facade_read_button_state(void);
+uint8_t facade_read_battery_level(void);
 
 /** @brief Initialize the expansion UART (USART2, PA2=TX / PA3=RX).
  *
