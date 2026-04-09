@@ -78,6 +78,8 @@ static void unpair_device(void);
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
 static void app_start_connect(void);
+static void app_start_disconnect(void);
+static void app_start_shutdown(void);
 static int32_t app_get_link_margin(void);
 
 static void pairing_application_callback(void);
@@ -91,8 +93,11 @@ int main(void)
 
     /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
     at_cmd_core_init();
+    at_cmd_core_set_device_role(AT_DEVICE_ROLE_COORDINATOR);
     at_cmd_core_register_pair_cb(app_start_pairing);
     at_cmd_core_register_connect_cb(app_start_connect);
+    at_cmd_core_register_disconnect_cb(app_start_disconnect);
+    at_cmd_core_register_shutdown_cb(app_start_shutdown);
 
     /* Initialize wireless core context switch handler before pairing is available */
     facade_set_context_switch_handler(swc_connection_callbacks_processing_handler);
@@ -574,5 +579,30 @@ static void app_start_connect(void)
     device_pairing_state = DEVICE_PAIRED;
     at_cmd_core_register_link_status_cb(app_get_link_status);
     at_cmd_core_register_link_margin_cb(app_get_link_margin);
-    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTING);
+}
+
+/** @brief Disconnect callback registered with at_cmd_core.
+ *
+ *  Terminates the UWB connection cleanly. Pairing address is preserved so
+ *  AT+UWB_CONNECT can reconnect without re-pairing.
+ */
+static void app_start_disconnect(void)
+{
+    if (device_pairing_state == DEVICE_UNPAIRED) {
+        return;
+    }
+    unpair_device();
+}
+
+/** @brief Shutdown callback registered with at_cmd_core.
+ *
+ *  Cleans up software state before at_cmd_core asserts the hardware
+ *  shutdown pin via facade_uwb_shutdown().
+ */
+static void app_start_shutdown(void)
+{
+    if (device_pairing_state == DEVICE_PAIRED) {
+        unpair_device();
+    }
 }

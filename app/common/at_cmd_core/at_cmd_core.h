@@ -35,10 +35,33 @@ extern "C" {
 
 /** @brief UWB connection status codes reported by AT+UWB_CONN_STATUS?. */
 typedef enum {
-    AT_UWB_CONN_STATUS_STANDBY   = 0, /*!< Idle, not yet started. */
-    AT_UWB_CONN_STATUS_PAIRING   = 1, /*!< Pairing procedure in progress. */
-    AT_UWB_CONN_STATUS_CONNECTED = 2, /*!< Link established and running. */
+    AT_UWB_CONN_STATUS_STANDBY    = 0, /*!< Idle, not yet started. */
+    AT_UWB_CONN_STATUS_PAIRING    = 1, /*!< Pairing procedure in progress. */
+    AT_UWB_CONN_STATUS_CONNECTED  = 2, /*!< Link established and running. */
+    AT_UWB_CONN_STATUS_CONNECTING = 3, /*!< Connection attempt in progress (after AT+UWB_CONNECT). */
 } at_uwb_conn_status_t;
+
+/** @brief Timeout for UWB connection attempts triggered by AT+UWB_CONNECT.
+ *
+ *  If the link is not established within this many milliseconds after
+ *  AT+UWB_CONNECT, a +EVENT: UWB_CONNECT_FAIL notification is sent.
+ */
+#define AT_UWB_CONNECT_TIMEOUT_MS  5000
+
+/** @brief Link margin threshold (dB) below which +EVENT: UWB_QUALITY:WEAK is sent. */
+#define AT_UWB_LINK_QUALITY_WEAK_THRESHOLD_DB   5
+
+/** @brief Link margin threshold (dB) above which the WEAK state clears (hysteresis). */
+#define AT_UWB_LINK_QUALITY_GOOD_THRESHOLD_DB   10
+
+/** @brief Interval (ms) between link quality polls when connected. */
+#define AT_UWB_LINK_QUALITY_CHECK_INTERVAL_MS   1000
+
+/** @brief Device role codes reported by AT+UWB_GET_ROLE?. */
+typedef enum {
+    AT_DEVICE_ROLE_NODE        = 0, /*!< Node (leaf) device. */
+    AT_DEVICE_ROLE_COORDINATOR = 1, /*!< Coordinator device. */
+} at_device_role_t;
 
 /**
  * @brief Initialize the AT command core.
@@ -74,6 +97,17 @@ void at_cmd_core_set_uwb_conn_status(at_uwb_conn_status_t status);
  * @param[in] addr  Local device address from swc_node_cfg_t.local_address.
  */
 void at_cmd_core_set_device_address(uint8_t addr);
+
+/**
+ * @brief Set the device role reported by AT+UWB_GET_ROLE?.
+ *
+ * Call once during application startup (before the main loop).
+ * Node applications pass AT_DEVICE_ROLE_NODE; coordinator applications
+ * pass AT_DEVICE_ROLE_COORDINATOR.
+ *
+ * @param[in] role  Device role.
+ */
+void at_cmd_core_set_device_role(at_device_role_t role);
 
 /**
  * @brief Send +EVENT: UWB_READY to the external MCU.
@@ -132,6 +166,77 @@ void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext));
  * @param[in] cb  Function returning link margin in dB. May be NULL to unregister.
  */
 void at_cmd_core_register_link_margin_cb(int32_t (*cb)(void));
+
+/**
+ * @brief Register a callback invoked when an AT command requires sending a
+ *        control command to the remote device over the UWB data channel.
+ *
+ * The callback receives the command type and value (see app_cmd.h) and is
+ * responsible for packing an app_cmd_t and calling wireless_send_data().
+ * Used on the DG side only; HS does not register this callback.
+ *
+ * @param[in] cb  Function accepting (cmd_type, value). May be NULL to unregister.
+ */
+void at_cmd_core_register_cmd_tx_cb(void (*cb)(uint8_t cmd_type, uint8_t value));
+
+/**
+ * @brief Register a callback invoked when volume should be applied to hardware.
+ *
+ * Used on the HS side. Called when AT+VOL=N is received from the local SOC
+ * OR when a CMD_VOL packet arrives from the DG over the UWB data channel.
+ * The callback receives the new volume level (0-100) and should apply it to
+ * the audio hardware (e.g. via sac_volume_ctrl).
+ * Not used on the DG side — DG forwards the command over UWB instead.
+ *
+ * @param[in] cb  Function accepting volume level 0-100. May be NULL to unregister.
+ */
+void at_cmd_core_register_vol_cb(void (*cb)(uint8_t vol));
+
+/**
+ * @brief Apply a volume value received from the remote device over UWB.
+ *
+ * Call this from the app's RX data handler when a CMD_VOL packet is received.
+ * Updates the internal volume cache, calls the registered vol hardware callback,
+ * and sends +EVENT: VOL=<n> to the local SOC over the expansion UART.
+ *
+ * @param[in] vol  Volume level 0-100.
+ */
+void at_cmd_core_notify_vol_received(uint8_t vol);
+
+/**
+ * @brief Update the cached battery level reported by AT+BATTERY?.
+ *
+ * Call this from the app's RX data handler whenever a CMD_BATTERY packet
+ * is received from the HS over the UWB data channel.
+ *
+ * @param[in] level  Battery level 0–100 (percent).
+ */
+void at_cmd_core_set_battery_level(uint8_t level);
+
+/**
+ * @brief Register a callback invoked when AT+UWB_SHUTDOWN is received.
+ *
+ * The callback should perform software cleanup (stop timers, call swc_disconnect,
+ * stop audio pipelines) before the hardware shutdown pin is asserted by the core.
+ * The core always calls facade_uwb_shutdown() after this callback returns,
+ * regardless of whether a callback is registered.
+ * If the device is already disconnected the callback should be a no-op.
+ *
+ * @param[in] cb  Function to call on AT+UWB_SHUTDOWN. May be NULL to unregister.
+ */
+void at_cmd_core_register_shutdown_cb(void (*cb)(void));
+
+/**
+ * @brief Register a callback invoked when AT+UWB_DISCONNECT is received.
+ *
+ * The callback should terminate the active UWB connection and stop all
+ * associated timers/pipelines (i.e. call unpair_device()). The pairing
+ * address is preserved so that AT+UWB_CONNECT can reconnect afterwards.
+ * If the device is already disconnected the callback should be a no-op.
+ *
+ * @param[in] cb  Function to call on AT+UWB_DISCONNECT. May be NULL to unregister.
+ */
+void at_cmd_core_register_disconnect_cb(void (*cb)(void));
 
 /**
  * @brief Register a callback invoked when AT+UWB_CONNECT is received.

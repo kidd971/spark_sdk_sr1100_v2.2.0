@@ -397,6 +397,12 @@ void facade_system_reset(void)
     quasar_system_reset();
 }
 
+void facade_uwb_shutdown(void)
+{
+    quasar_radio_1_set_shutdown_pin();
+    quasar_radio_2_set_shutdown_pin();
+}
+
 void facade_set_i2s_mux(bool use_ext)
 {
     quasar_audio_set_i2s_mux_selection(use_ext ? QUASAR_SELECT_EXT_CODEC

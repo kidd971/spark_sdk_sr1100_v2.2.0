@@ -283,6 +283,12 @@ void facade_system_reset(void)
     quasar_system_reset();
 }
 
+void facade_uwb_shutdown(void)
+{
+    quasar_radio_1_set_shutdown_pin();
+    quasar_radio_2_set_shutdown_pin();
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 /** @brief Blinks the LED 1 a specified number of times.
  *

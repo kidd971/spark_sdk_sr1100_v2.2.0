@@ -44,6 +44,14 @@ uint32_t facade_get_tick_ms(void);
  */
 void facade_system_reset(void);
 
+/** @brief Assert the hardware shutdown pin(s) on the UWB radio(s).
+ *
+ *  Puts the UWB transceiver(s) into their hardware shutdown state.
+ *  Called after the AT response has been flushed and any app-level
+ *  cleanup (swc_disconnect, audio stop) has completed.
+ */
+void facade_uwb_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

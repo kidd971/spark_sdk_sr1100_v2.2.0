@@ -24,19 +24,40 @@ static bool handler_module_reset(const char *args, char *resp, uint16_t resp_siz
 static bool handler_conn_lm(const char *args, char *resp, uint16_t resp_size);
 static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size);
 static bool handler_uwb_connect(const char *args, char *resp, uint16_t resp_size);
+static bool handler_uwb_disconnect(const char *args, char *resp, uint16_t resp_size);
+static bool handler_uwb_shutdown(const char *args, char *resp, uint16_t resp_size);
+static bool handler_uwb_get_role(const char *args, char *resp, uint16_t resp_size);
+static bool handler_vol(const char *args, char *resp, uint16_t resp_size);
+static bool handler_play(const char *args, char *resp, uint16_t resp_size);
+static bool handler_stop(const char *args, char *resp, uint16_t resp_size);
+static bool handler_next_track(const char *args, char *resp, uint16_t resp_size);
+static bool handler_pre_track(const char *args, char *resp, uint16_t resp_size);
+static bool handler_battery(const char *args, char *resp, uint16_t resp_size);
 
 /* PRIVATE VARIABLES **********************************************************/
 static uint8_t              s_device_address   = 0xFF;
 static at_uwb_conn_status_t s_uwb_conn_status  = AT_UWB_CONN_STATUS_STANDBY;
+static at_device_role_t     s_device_role      = AT_DEVICE_ROLE_NODE;
+static int32_t              s_vol              = 0;
+static uint8_t              s_battery_level    = 0;
 static void               (*s_pair_cb)(void)    = NULL;
 static bool               (*s_link_status_cb)(void) = NULL;
 static int32_t            (*s_link_margin_cb)(void) = NULL;
 static void               (*s_i2s_mux_cb)(bool use_ext) = NULL;
 static void               (*s_connect_cb)(void)         = NULL;
+static void               (*s_cmd_tx_cb)(uint8_t cmd_type, uint8_t value) = NULL;
+static void               (*s_vol_hw_cb)(uint8_t vol)                    = NULL;
+static void               (*s_disconnect_cb)(void)      = NULL;
+static void               (*s_shutdown_cb)(void)        = NULL;
 static bool                 s_i2s_mux_is_ext   = false;
 static bool                 s_pair_requested   = false;
 static bool                 s_reset_requested  = false;
-static bool                 s_connect_requested = false;
+static bool                 s_connect_requested    = false;
+static uint32_t             s_connect_start_tick   = 0;
+static bool                 s_link_quality_weak    = false;
+static uint32_t             s_link_quality_last_check_tick = 0;
+static bool                 s_disconnect_requested = false;
+static bool                 s_shutdown_requested   = false;
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 void at_cmd_core_init(void)
@@ -62,6 +83,15 @@ void at_cmd_core_init(void)
     at_server_register("CONN_LM",         handler_conn_lm);
     at_server_register("I2S_MUX",         handler_i2s_mux);
     at_server_register("UWB_CONNECT",     handler_uwb_connect);
+    at_server_register("UWB_DISCONNECT",  handler_uwb_disconnect);
+    at_server_register("UWB_SHUTDOWN",    handler_uwb_shutdown);
+    at_server_register("UWB_GET_ROLE",    handler_uwb_get_role);
+    at_server_register("VOL",             handler_vol);
+    at_server_register("PLAY",            handler_play);
+    at_server_register("STOP",            handler_stop);
+    at_server_register("NEXT_TRACK",      handler_next_track);
+    at_server_register("PRE_TRACK",       handler_pre_track);
+    at_server_register("BATTERY",         handler_battery);
 }
 
 void at_cmd_core_register_link_status_cb(bool (*cb)(void))
@@ -79,9 +109,46 @@ void at_cmd_core_register_i2s_mux_cb(void (*cb)(bool use_ext))
     s_i2s_mux_cb = cb;
 }
 
+void at_cmd_core_register_cmd_tx_cb(void (*cb)(uint8_t cmd_type, uint8_t value))
+{
+    s_cmd_tx_cb = cb;
+}
+
+void at_cmd_core_register_vol_cb(void (*cb)(uint8_t vol))
+{
+    s_vol_hw_cb = cb;
+}
+
+void at_cmd_core_notify_vol_received(uint8_t vol)
+{
+    char event[24];
+
+    s_vol = vol;
+    if (s_vol_hw_cb != NULL) {
+        s_vol_hw_cb(vol);
+    }
+    snprintf(event, sizeof(event), "+EVENT: VOL=%d\r\n", (int)vol);
+    facade_expansion_uart_write(event);
+}
+
+void at_cmd_core_set_battery_level(uint8_t level)
+{
+    s_battery_level = level;
+}
+
 void at_cmd_core_register_connect_cb(void (*cb)(void))
 {
     s_connect_cb = cb;
+}
+
+void at_cmd_core_register_disconnect_cb(void (*cb)(void))
+{
+    s_disconnect_cb = cb;
+}
+
+void at_cmd_core_register_shutdown_cb(void (*cb)(void))
+{
+    s_shutdown_cb = cb;
 }
 
 void at_cmd_core_notify_uwb_ready(void)
@@ -102,6 +169,11 @@ void at_cmd_core_set_uwb_conn_status(at_uwb_conn_status_t status)
 void at_cmd_core_set_device_address(uint8_t addr)
 {
     s_device_address = addr;
+}
+
+void at_cmd_core_set_device_role(at_device_role_t role)
+{
+    s_device_role = role;
 }
 
 void at_cmd_core_process(void)
@@ -128,9 +200,42 @@ void at_cmd_core_process(void)
         if (s_connect_cb != NULL) {
             s_connect_cb();
         }
+        /* If the app entered CONNECTING state, record the start tick for timeout. */
+        if (s_uwb_conn_status == AT_UWB_CONN_STATUS_CONNECTING) {
+            s_connect_start_tick = facade_get_tick_ms();
+        }
+    }
+
+    /* Invoke disconnect callback deferred — after at_module_process() has sent OK. */
+    if (s_disconnect_requested) {
+        s_disconnect_requested = false;
+        if (s_disconnect_cb != NULL) {
+            s_disconnect_cb();
+        }
+    }
+
+    /* Invoke shutdown callback then assert hardware shutdown — deferred. */
+    if (s_shutdown_requested) {
+        s_shutdown_requested = false;
+        if (s_shutdown_cb != NULL) {
+            s_shutdown_cb(); /* app cleanup: stop timers, disconnect SWC */
+        }
+        facade_uwb_shutdown(); /* assert radio shutdown pin(s) */
     }
 
     if (s_link_status_cb == NULL || s_uwb_conn_status == AT_UWB_CONN_STATUS_PAIRING) {
+        return;
+    }
+
+    /* Connecting window: wait for link-up or timeout → CONNECT_FAIL. */
+    if (s_uwb_conn_status == AT_UWB_CONN_STATUS_CONNECTING) {
+        if (s_link_status_cb()) {
+            s_uwb_conn_status = AT_UWB_CONN_STATUS_CONNECTED;
+            facade_expansion_uart_write("+EVENT: UWB_CONNECTED\r\n");
+        } else if (facade_get_tick_ms() - s_connect_start_tick >= AT_UWB_CONNECT_TIMEOUT_MS) {
+            s_uwb_conn_status = AT_UWB_CONN_STATUS_STANDBY;
+            facade_expansion_uart_write("+EVENT: UWB_CONNECT_FAIL\r\n");
+        }
         return;
     }
 
@@ -143,7 +248,24 @@ void at_cmd_core_process(void)
         if (new_status == AT_UWB_CONN_STATUS_CONNECTED) {
             facade_expansion_uart_write("+EVENT: UWB_CONNECTED\r\n");
         } else {
+            s_link_quality_weak = false; /* reset on disconnect so WEAK can fire again */
             facade_expansion_uart_write("+EVENT: UWB_DISCONNECTED\r\n");
+        }
+    }
+
+    /* Link quality monitor: poll link margin periodically and notify on threshold crossing. */
+    if (s_uwb_conn_status == AT_UWB_CONN_STATUS_CONNECTED && s_link_margin_cb != NULL) {
+        uint32_t now = facade_get_tick_ms();
+        if (now - s_link_quality_last_check_tick >= AT_UWB_LINK_QUALITY_CHECK_INTERVAL_MS) {
+            s_link_quality_last_check_tick = now;
+            int32_t margin = s_link_margin_cb();
+            if (!s_link_quality_weak && margin < AT_UWB_LINK_QUALITY_WEAK_THRESHOLD_DB) {
+                s_link_quality_weak = true;
+                facade_expansion_uart_write("+EVENT: UWB_QUALITY:WEAK\r\n");
+            } else if (s_link_quality_weak && margin >= AT_UWB_LINK_QUALITY_GOOD_THRESHOLD_DB) {
+                s_link_quality_weak = false;
+                facade_expansion_uart_write("+EVENT: UWB_QUALITY:GOOD\r\n");
+            }
         }
     }
 }
@@ -243,6 +365,108 @@ static bool handler_i2s_mux(const char *args, char *resp, uint16_t resp_size)
     return true;
 }
 
+/** @brief AT+UWB_SHUTDOWN — disconnect and assert hardware shutdown pin on UWB radio(s). */
+static bool handler_uwb_shutdown(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    s_shutdown_requested = true;
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+VOL=[0-100] / AT+VOL? — set or query headphone volume. */
+static bool handler_vol(const char *args, char *resp, uint16_t resp_size)
+{
+    if (args[0] == '?') {
+        snprintf(resp, resp_size, "+VOL: %d", (int)s_vol);
+        return true;
+    }
+
+    int vol;
+    if (sscanf(args, "=%d", &vol) != 1 || vol < 0 || vol > 100) {
+        snprintf(resp, resp_size, "ERROR");
+        return true;
+    }
+    s_vol = vol;
+    if (s_cmd_tx_cb != NULL) {
+        s_cmd_tx_cb(0x01 /* CMD_VOL */, (uint8_t)vol); /* DG: forward over UWB */
+    }
+    if (s_vol_hw_cb != NULL) {
+        s_vol_hw_cb((uint8_t)vol); /* HS: apply to hardware */
+    }
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+STOP — forward Stop command to BLE SOC. */
+static bool handler_stop(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    if (s_cmd_tx_cb != NULL) {
+        s_cmd_tx_cb(0x03 /* CMD_STOP */, 0);
+    }
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+NEXT_TRACK — forward Skip to next track command to BLE SOC. */
+static bool handler_next_track(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    if (s_cmd_tx_cb != NULL) {
+        s_cmd_tx_cb(0x04 /* CMD_NEXT_TRACK */, 0);
+    }
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+PRE_TRACK — forward Return to previous track command to BLE SOC. */
+static bool handler_pre_track(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    if (s_cmd_tx_cb != NULL) {
+        s_cmd_tx_cb(0x05 /* CMD_PRE_TRACK */, 0);
+    }
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+PLAY — forward Play/Pause command to BLE SOC. */
+static bool handler_play(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    if (s_cmd_tx_cb != NULL) {
+        s_cmd_tx_cb(0x02 /* CMD_PLAY */, 0);
+    }
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
+/** @brief AT+BATTERY? — query cached HS battery level (0-100%). */
+static bool handler_battery(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    snprintf(resp, resp_size, "+BATTERY: %d", (int)s_battery_level);
+    return true;
+}
+
+/** @brief AT+UWB_GET_ROLE? — report device role (0=Node, 1=Coordinator). */
+static bool handler_uwb_get_role(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    snprintf(resp, resp_size, "+GET_ROLE: %d", (int)s_device_role);
+    return true;
+}
+
+/** @brief AT+UWB_DISCONNECT — terminate the active UWB connection. */
+static bool handler_uwb_disconnect(const char *args, char *resp, uint16_t resp_size)
+{
+    (void)args;
+    s_disconnect_requested = true;
+    snprintf(resp, resp_size, "OK");
+    return true;
+}
+
 /** @brief AT+UWB_CONNECT — re-establish UWB connection using stored pairing address. */
 static bool handler_uwb_connect(const char *args, char *resp, uint16_t resp_size)
 {
@@ -271,6 +495,16 @@ static bool handler_help(const char *args, char *resp, uint16_t resp_size)
         "  AT+CONN_LM?\r\n",
         "  AT+I2S_MUX\r\n",
         "  AT+UWB_CONNECT\r\n",
+        "  AT+UWB_DISCONNECT\r\n",
+        "  AT+UWB_SHUTDOWN\r\n",
+        "  AT+UWB_GET_ROLE?\r\n",
+        "  AT+VOL=[0-100]\r\n",
+        "  AT+VOL?\r\n",
+        "  AT+PLAY\r\n",
+        "  AT+STOP\r\n",
+        "  AT+NEXT_TRACK\r\n",
+        "  AT+PRE_TRACK\r\n",
+        "  AT+BATTERY?\r\n",
     };
 
     facade_expansion_uart_write("+HELP:\r\n");

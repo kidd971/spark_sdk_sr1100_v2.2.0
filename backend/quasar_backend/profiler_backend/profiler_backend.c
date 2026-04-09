@@ -198,6 +198,12 @@ void facade_system_reset(void)
     quasar_system_reset();
 }
 
+void facade_uwb_shutdown(void)
+{
+    quasar_radio_1_set_shutdown_pin();
+    quasar_radio_2_set_shutdown_pin();
+}
+
 void facade_expansion_uart_init(uint32_t baud_rate)
 {
     quasar_gpio_config_t gpio_tx = {

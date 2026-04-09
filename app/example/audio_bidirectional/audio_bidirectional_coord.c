@@ -35,6 +35,7 @@
 #include "swc_error.h"
 #include "swc_stats.h"
 #include "at_cmd_core.h"
+#include "app_cmd.h"
 
 /* CONSTANTS ******************************************************************/
 /* Total memory needed for the Audio Core. */
@@ -185,6 +186,9 @@ static void app_audio_core_init(void);
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
 static void app_start_connect(void);
+static void app_start_disconnect(void);
+static void app_start_shutdown(void);
+static void app_send_cmd(uint8_t cmd_type, uint8_t value);
 static int32_t app_get_link_margin(void);
 static void app_set_i2s_mux(bool use_ext);
 
@@ -239,8 +243,12 @@ int main(void)
 
     /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
     at_cmd_core_init();
+    at_cmd_core_set_device_role(AT_DEVICE_ROLE_COORDINATOR);
     at_cmd_core_register_pair_cb(app_start_pairing);
     at_cmd_core_register_connect_cb(app_start_connect);
+    at_cmd_core_register_disconnect_cb(app_start_disconnect);
+    at_cmd_core_register_shutdown_cb(app_start_shutdown);
+    at_cmd_core_register_cmd_tx_cb(app_send_cmd);
     at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
 
     /* Initialize wireless core context switch handler before pairing is available */
@@ -653,6 +661,17 @@ static void conn_rx_data_success_callback(void *conn)
     /* Get received payload. */
     read_data_size = wireless_read_data(&received_user_data, sizeof(received_user_data), &swc_err);
     ASSERT_SWC_STATUS(swc_err);
+
+    if (read_data_size == sizeof(app_cmd_t)) {
+        /* Application command packet received from HS over UWB. */
+        app_cmd_t *cmd = (app_cmd_t *)&received_user_data;
+        if (cmd->cmd_type == CMD_BATTERY) {
+            at_cmd_core_set_battery_level(cmd->value);
+        } else if (cmd->cmd_type == CMD_VOL) {
+            at_cmd_core_notify_vol_received(cmd->value); /* update cache + notify SOC */
+        }
+        return;
+    }
 
     if (read_data_size > 0) {
         /* Depending on the requested button state from the Node, the specified LED turns on or off. */
@@ -1613,5 +1632,39 @@ static void app_start_connect(void)
     device_pairing_state = DEVICE_PAIRED;
     at_cmd_core_register_link_status_cb(app_get_link_status);
     at_cmd_core_register_link_margin_cb(app_get_link_margin);
-    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTING);
+}
+
+/** @brief Disconnect callback registered with at_cmd_core.
+ *
+ *  Terminates the UWB connection cleanly. Pairing address is preserved so
+ *  AT+UWB_CONNECT can reconnect without re-pairing.
+ */
+static void app_start_disconnect(void)
+{
+    if (device_pairing_state == DEVICE_UNPAIRED) {
+        return;
+    }
+    unpair_device();
+}
+
+/** @brief Shutdown callback registered with at_cmd_core.
+ *
+ *  Cleans up software state before at_cmd_core asserts the hardware
+ *  shutdown pin via facade_uwb_shutdown().
+ */
+static void app_start_shutdown(void)
+{
+    if (device_pairing_state == DEVICE_PAIRED) {
+        unpair_device();
+    }
+}
+
+/** @brief Send an application command to the remote device over the UWB data channel. */
+static void app_send_cmd(uint8_t cmd_type, uint8_t value)
+{
+    swc_error_t swc_err = SWC_ERR_NONE;
+    app_cmd_t cmd = {cmd_type, value};
+
+    wireless_send_data(&cmd, sizeof(cmd), &swc_err);
 }

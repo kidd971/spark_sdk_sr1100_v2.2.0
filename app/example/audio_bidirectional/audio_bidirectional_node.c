@@ -34,6 +34,7 @@
 #include "swc_cfg_node.h"
 #include "swc_stats.h"
 #include "at_cmd_core.h"
+#include "app_cmd.h"
 
 /* CONSTANTS ******************************************************************/
 /* Total memory needed for the Audio Core. */
@@ -177,6 +178,9 @@ static void app_swc_core_init(pairing_assigned_address_t *app_pairing, swc_error
 static bool app_get_link_status(void);
 static void app_start_pairing(void);
 static void app_start_connect(void);
+static void app_start_disconnect(void);
+static void app_start_shutdown(void);
+static void app_set_volume(uint8_t vol);
 static int32_t app_get_link_margin(void);
 static void app_set_i2s_mux(bool use_ext);
 static void app_audio_core_init(void);
@@ -232,8 +236,12 @@ int main(void)
 
     /* Initialize AT command core on expansion UART (USART2, PA2/PA3). */
     at_cmd_core_init();
+    at_cmd_core_set_device_role(AT_DEVICE_ROLE_NODE);
     at_cmd_core_register_pair_cb(app_start_pairing);
     at_cmd_core_register_connect_cb(app_start_connect);
+    at_cmd_core_register_disconnect_cb(app_start_disconnect);
+    at_cmd_core_register_shutdown_cb(app_start_shutdown);
+    at_cmd_core_register_vol_cb(app_set_volume);
     at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
 
     /* Initialize wireless core context switch handler before pairing is available */
@@ -641,6 +649,15 @@ static void conn_rx_data_success_callback(void *conn)
     /* Get received payload. */
     read_data_size = wireless_read_data(&received_user_data, sizeof(received_user_data), &swc_err);
     ASSERT_SWC_STATUS(swc_err);
+
+    if (read_data_size == sizeof(app_cmd_t)) {
+        /* Application command packet received from DG over UWB. */
+        app_cmd_t *cmd = (app_cmd_t *)&received_user_data;
+        if (cmd->cmd_type == CMD_VOL) {
+            at_cmd_core_notify_vol_received(cmd->value); /* apply hw + notify SOC */
+        }
+        return;
+    }
 
     if (read_data_size > 0) {
         /* Depending on the requested button state from the Node, the specified LED turns on or off. */
@@ -1303,6 +1320,15 @@ static void data_callback(void)
 
     /* Send the button state to the Coordinator. */
     wireless_send_data(&transmitted_user_data, sizeof(transmitted_user_data), &swc_err);
+
+    /* Send battery level to DG every ~30 s (data_callback fires every 10 ms). */
+#define BATTERY_REPORT_INTERVAL_COUNT 3000
+    static uint16_t battery_tick = 0;
+    if (++battery_tick >= BATTERY_REPORT_INTERVAL_COUNT) {
+        battery_tick = 0;
+        app_cmd_t batt_cmd = {CMD_BATTERY, 100 /* TODO: facade_read_battery_level() */};
+        wireless_send_data(&batt_cmd, sizeof(batt_cmd), &swc_err);
+    }
 }
 
 /** @brief Enter Pairing Mode using the Pairing Module.
@@ -1589,5 +1615,42 @@ static void app_start_connect(void)
     device_pairing_state = DEVICE_PAIRED;
     at_cmd_core_register_link_status_cb(app_get_link_status);
     at_cmd_core_register_link_margin_cb(app_get_link_margin);
-    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTED);
+    at_cmd_core_set_uwb_conn_status(AT_UWB_CONN_STATUS_CONNECTING);
+}
+
+/** @brief Disconnect callback registered with at_cmd_core.
+ *
+ *  Terminates the UWB connection cleanly. Pairing address is preserved so
+ *  AT+UWB_CONNECT can reconnect without re-pairing.
+ */
+static void app_start_disconnect(void)
+{
+    if (device_pairing_state == DEVICE_UNPAIRED) {
+        return;
+    }
+    unpair_device();
+}
+
+/** @brief Shutdown callback registered with at_cmd_core.
+ *
+ *  Cleans up software state before at_cmd_core asserts the hardware
+ *  shutdown pin via facade_uwb_shutdown().
+ */
+static void app_start_shutdown(void)
+{
+    if (device_pairing_state == DEVICE_PAIRED) {
+        unpair_device();
+    }
+}
+
+/** @brief Volume hardware callback registered with at_cmd_core (HS side).
+ *
+ *  Called when AT+VOL=N is received from the local SOC or when a CMD_VOL
+ *  packet arrives from the DG over the UWB data channel.
+ *  TODO: map 0-100 to actual SAC volume control when hardware is wired up.
+ */
+static void app_set_volume(uint8_t vol)
+{
+    (void)vol;
+    /* Placeholder: apply vol to audio hardware here (e.g. sac_volume_ctrl). */
 }

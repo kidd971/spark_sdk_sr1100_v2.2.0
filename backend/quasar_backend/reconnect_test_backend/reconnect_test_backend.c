@@ -188,6 +188,12 @@ void facade_system_reset(void)
     quasar_system_reset();
 }
 
+void facade_uwb_shutdown(void)
+{
+    quasar_radio_1_set_shutdown_pin();
+    quasar_radio_2_set_shutdown_pin();
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 /** @brief Turn off all LEDs.
  */
