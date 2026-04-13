@@ -129,6 +129,17 @@ bool at_client_send(const char          *cmd,
  */
 void at_server_list_commands(char *buf, uint16_t buf_size);
 
+/**
+ * @brief Register a fallback handler called for any unrecognised or malformed input.
+ *
+ * When set, replaces the default "+CME ERROR: UNKNOWN_CMD / INVALID_CMD" response.
+ * Typical use: register a function that prints AT+HELP output so the user always
+ * sees the supported command list on bad input.
+ *
+ * @param[in] cb  Void callback to invoke on bad input. Pass NULL to restore default.
+ */
+void at_module_set_fallback_handler(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif

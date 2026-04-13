@@ -43,6 +43,9 @@ static uint16_t s_line_idx;
 static at_server_entry_t s_server_table[AT_SERVER_MAX_COMMANDS];
 static uint8_t           s_server_count;
 
+/* Fallback handler — called for any unrecognised or malformed input. */
+static void (*s_fallback_fn)(void) = NULL;
+
 /* AT Client */
 static at_client_slot_t  s_queue[AT_CLIENT_QUEUE_SIZE];
 static uint8_t           s_queue_head;   /* index of the active (sent) slot  */
@@ -143,6 +146,11 @@ void at_server_list_commands(char *buf, uint16_t buf_size)
             break;
         }
     }
+}
+
+void at_module_set_fallback_handler(void (*cb)(void))
+{
+    s_fallback_fn = cb;
 }
 
 bool at_client_send(const char          *cmd,
@@ -247,7 +255,11 @@ static void line_dispatch(const char *line)
     if (s_client_state == CLIENT_WAITING) {
         client_append_resp(line);
     } else {
-        s_tx_fn("+CME ERROR: INVALID_CMD\r\n");
+        if (s_fallback_fn != NULL) {
+            s_fallback_fn();
+        } else {
+            s_tx_fn("+CME ERROR: INVALID_CMD\r\n");
+        }
     }
 }
 
@@ -317,8 +329,12 @@ static void server_process(const char *line)
         }
     }
 
-    /* No handler registered for this command. */
-    s_tx_fn("+CME ERROR: UNKNOWN_CMD\r\n");
+    /* No handler registered for this command — invoke fallback (e.g. print help). */
+    if (s_fallback_fn != NULL) {
+        s_fallback_fn();
+    } else {
+        s_tx_fn("+CME ERROR: UNKNOWN_CMD\r\n");
+    }
 }
 
 /** @brief Transmit the command at the head of the queue and start the timer. */

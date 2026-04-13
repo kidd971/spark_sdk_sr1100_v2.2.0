@@ -33,6 +33,7 @@ static bool handler_stop(const char *args, char *resp, uint16_t resp_size);
 static bool handler_next_track(const char *args, char *resp, uint16_t resp_size);
 static bool handler_pre_track(const char *args, char *resp, uint16_t resp_size);
 static bool handler_battery(const char *args, char *resp, uint16_t resp_size);
+static void at_cmd_core_fallback(void);
 
 /* PRIVATE VARIABLES **********************************************************/
 static uint8_t              s_device_address   = 0xFF;
@@ -97,6 +98,15 @@ void at_cmd_core_init(void)
     at_server_register("NEXT_TRACK",      handler_next_track);
     at_server_register("PRE_TRACK",       handler_pre_track);
     at_server_register("BATTERY",         handler_battery);
+
+    at_module_set_fallback_handler(at_cmd_core_fallback);
+}
+
+/** @brief Fallback handler — prints AT+HELP output for any unknown/malformed input. */
+static void at_cmd_core_fallback(void)
+{
+    char unused[1];
+    handler_help("", unused, sizeof(unused));
 }
 
 void at_cmd_core_register_link_status_cb(bool (*cb)(void))

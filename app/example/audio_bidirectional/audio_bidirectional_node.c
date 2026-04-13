@@ -224,6 +224,7 @@ static void app_audio_core_compression_discard_interface_init(sac_processing_int
 static void volume_up(void);
 static void volume_down(void);
 static void play_pause(void);
+static void app_play_hw(void);
 static void app_play_pause_hw(void);
 static void app_stop_hw(void);
 static void enter_pairing_mode(void);
@@ -252,7 +253,7 @@ int main(void)
     at_cmd_core_register_disconnect_cb(app_start_disconnect);
     at_cmd_core_register_shutdown_cb(app_start_shutdown);
     at_cmd_core_register_vol_cb(app_set_volume);
-    at_cmd_core_register_play_cb(app_play_pause_hw);
+    at_cmd_core_register_play_cb(app_play_hw);
     at_cmd_core_register_stop_cb(app_stop_hw);
     at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
     //at_cmd_core_register_battery_cb(facade_read_battery_level);
@@ -1148,6 +1149,13 @@ static void volume_down(void)
     sac_processing_ctrl(main_channel_volume_processing, main_channel_sac_pipeline, SAC_VOLUME_DECREASE, SAC_NO_ARG,
                         &sac_status);
     ASSERT_SAC_STATUS(sac_status);
+}
+
+/** @brief Play hardware callback — always unmute (used by AT+PLAY command). */
+static void app_play_hw(void)
+{
+    main_channel_volume_instance._internal.volume_threshold = s_saved_vol_threshold;
+    s_audio_playing = true;
 }
 
 /** @brief Play/Pause hardware callback — toggle SAC audio mute state.
