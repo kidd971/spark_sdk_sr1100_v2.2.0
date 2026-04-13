@@ -669,6 +669,8 @@ static void conn_rx_data_success_callback(void *conn)
             at_cmd_core_set_battery_level(cmd->value);
         } else if (cmd->cmd_type == CMD_VOL) {
             at_cmd_core_notify_vol_received(cmd->value); /* update cache + notify SOC */
+        } else if (cmd->cmd_type == CMD_PLAY) {
+            at_cmd_core_notify_play_received(); /* notify DG SOC: HS button was pressed */
         }
         return;
     }

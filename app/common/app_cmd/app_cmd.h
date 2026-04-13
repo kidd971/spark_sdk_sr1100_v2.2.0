@@ -10,7 +10,9 @@
  *
  *  Direction:
  *    DG → HS : CMD_VOL, CMD_PLAY, CMD_STOP, CMD_NEXT_TRACK, CMD_PRE_TRACK
- *    HS → DG : CMD_BATTERY
+ *    HS → DG : CMD_BATTERY, CMD_VOL (local change echo), CMD_PLAY (button event)
+ *    Bidirectional: CMD_VOL (DG sets absolute; HS echoes local change back to DG)
+ *                   CMD_PLAY (DG triggers; HS button reports back to DG)
  */
 #ifndef APP_CMD_H_
 #define APP_CMD_H_

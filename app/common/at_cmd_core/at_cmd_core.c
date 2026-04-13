@@ -47,6 +47,10 @@ static void               (*s_i2s_mux_cb)(bool use_ext) = NULL;
 static void               (*s_connect_cb)(void)         = NULL;
 static void               (*s_cmd_tx_cb)(uint8_t cmd_type, uint8_t value) = NULL;
 static void               (*s_vol_hw_cb)(uint8_t vol)                    = NULL;
+static void               (*s_play_hw_cb)(void)                          = NULL;
+static void               (*s_stop_hw_cb)(void)                          = NULL;
+static void               (*s_next_track_hw_cb)(void)                    = NULL;
+static void               (*s_pre_track_hw_cb)(void)                     = NULL;
 static void               (*s_disconnect_cb)(void)      = NULL;
 static void               (*s_shutdown_cb)(void)        = NULL;
 static uint8_t            (*s_battery_cb)(void)         = NULL;
@@ -118,6 +122,58 @@ void at_cmd_core_register_cmd_tx_cb(void (*cb)(uint8_t cmd_type, uint8_t value))
 void at_cmd_core_register_vol_cb(void (*cb)(uint8_t vol))
 {
     s_vol_hw_cb = cb;
+}
+
+void at_cmd_core_register_play_cb(void (*cb)(void))
+{
+    s_play_hw_cb = cb;
+}
+
+void at_cmd_core_notify_play_received(void)
+{
+    if (s_play_hw_cb != NULL) {
+        s_play_hw_cb();
+    }
+    facade_expansion_uart_write("+EVENT: PLAY\r\n");
+}
+
+void at_cmd_core_register_stop_cb(void (*cb)(void))
+{
+    s_stop_hw_cb = cb;
+}
+
+void at_cmd_core_notify_stop_received(void)
+{
+    if (s_stop_hw_cb != NULL) {
+        s_stop_hw_cb();
+    }
+    facade_expansion_uart_write("+EVENT: STOP\r\n");
+}
+
+void at_cmd_core_register_next_track_cb(void (*cb)(void))
+{
+    s_next_track_hw_cb = cb;
+}
+
+void at_cmd_core_notify_next_track_received(void)
+{
+    if (s_next_track_hw_cb != NULL) {
+        s_next_track_hw_cb();
+    }
+    facade_expansion_uart_write("+EVENT: NEXT_TRACK\r\n");
+}
+
+void at_cmd_core_register_pre_track_cb(void (*cb)(void))
+{
+    s_pre_track_hw_cb = cb;
+}
+
+void at_cmd_core_notify_pre_track_received(void)
+{
+    if (s_pre_track_hw_cb != NULL) {
+        s_pre_track_hw_cb();
+    }
+    facade_expansion_uart_write("+EVENT: PRE_TRACK\r\n");
 }
 
 void at_cmd_core_notify_vol_received(uint8_t vol)
@@ -404,45 +460,57 @@ static bool handler_vol(const char *args, char *resp, uint16_t resp_size)
     return true;
 }
 
-/** @brief AT+STOP — forward Stop command to BLE SOC. */
+/** @brief AT+STOP — DG: forward Stop over UWB to HS; HS: apply locally. */
 static bool handler_stop(const char *args, char *resp, uint16_t resp_size)
 {
     (void)args;
     if (s_cmd_tx_cb != NULL) {
-        s_cmd_tx_cb(0x03 /* CMD_STOP */, 0);
+        s_cmd_tx_cb(0x03 /* CMD_STOP */, 0); /* DG: forward to HS over UWB */
+    }
+    if (s_stop_hw_cb != NULL) {
+        s_stop_hw_cb(); /* HS: apply locally */
     }
     snprintf(resp, resp_size, "OK");
     return true;
 }
 
-/** @brief AT+NEXT_TRACK — forward Skip to next track command to BLE SOC. */
+/** @brief AT+NEXT_TRACK — DG: forward over UWB to HS; HS: apply locally. */
 static bool handler_next_track(const char *args, char *resp, uint16_t resp_size)
 {
     (void)args;
     if (s_cmd_tx_cb != NULL) {
         s_cmd_tx_cb(0x04 /* CMD_NEXT_TRACK */, 0);
     }
+    if (s_next_track_hw_cb != NULL) {
+        s_next_track_hw_cb();
+    }
     snprintf(resp, resp_size, "OK");
     return true;
 }
 
-/** @brief AT+PRE_TRACK — forward Return to previous track command to BLE SOC. */
+/** @brief AT+PRE_TRACK — DG: forward over UWB to HS; HS: apply locally. */
 static bool handler_pre_track(const char *args, char *resp, uint16_t resp_size)
 {
     (void)args;
     if (s_cmd_tx_cb != NULL) {
         s_cmd_tx_cb(0x05 /* CMD_PRE_TRACK */, 0);
     }
+    if (s_pre_track_hw_cb != NULL) {
+        s_pre_track_hw_cb();
+    }
     snprintf(resp, resp_size, "OK");
     return true;
 }
 
-/** @brief AT+PLAY — forward Play/Pause command to BLE SOC. */
+/** @brief AT+PLAY — DG: forward Play/Pause over UWB to HS; HS: apply locally. */
 static bool handler_play(const char *args, char *resp, uint16_t resp_size)
 {
     (void)args;
     if (s_cmd_tx_cb != NULL) {
-        s_cmd_tx_cb(0x02 /* CMD_PLAY */, 0);
+        s_cmd_tx_cb(0x02 /* CMD_PLAY */, 0); /* DG: forward to HS over UWB */
+    }
+    if (s_play_hw_cb != NULL) {
+        s_play_hw_cb(); /* HS: apply locally */
     }
     snprintf(resp, resp_size, "OK");
     return true;

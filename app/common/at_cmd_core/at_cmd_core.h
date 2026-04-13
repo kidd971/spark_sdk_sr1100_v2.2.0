@@ -193,6 +193,57 @@ void at_cmd_core_register_cmd_tx_cb(void (*cb)(uint8_t cmd_type, uint8_t value))
 void at_cmd_core_register_vol_cb(void (*cb)(uint8_t vol));
 
 /**
+ * @brief Register a callback invoked when play/pause should be applied to hardware.
+ *
+ * Used on the HS side. Called when AT+PLAY is received from the local SOC
+ * OR when a CMD_PLAY packet arrives from the DG over the UWB data channel.
+ * Not used on the DG side — DG forwards the command over UWB instead.
+ *
+ * @param[in] cb  Function to call on play/pause. May be NULL to unregister.
+ */
+void at_cmd_core_register_play_cb(void (*cb)(void));
+
+/**
+ * @brief Notify that a play/pause event was received (from UWB or local button).
+ *
+ * Calls the registered play hardware callback and sends +EVENT: PLAY to the
+ * local SOC over the expansion UART.
+ * Call from the app's RX data handler when CMD_PLAY is received, or from
+ * the button handler when a local play/pause button is pressed.
+ */
+void at_cmd_core_notify_play_received(void);
+
+/**
+ * @brief Register a callback invoked when stop should be applied to hardware.
+ *
+ * Used on the HS side. Called when AT+STOP is received from the local SOC
+ * OR when a CMD_STOP packet arrives from the DG over the UWB data channel.
+ *
+ * @param[in] cb  Function to call on stop. May be NULL to unregister.
+ */
+void at_cmd_core_register_stop_cb(void (*cb)(void));
+
+/**
+ * @brief Notify that a stop event was received (from UWB or local SOC).
+ *
+ * Calls the registered stop hardware callback and sends +EVENT: STOP to the
+ * local SOC over the expansion UART.
+ */
+void at_cmd_core_notify_stop_received(void);
+
+/** @brief Register a callback invoked when next track should be applied to hardware (HS side). */
+void at_cmd_core_register_next_track_cb(void (*cb)(void));
+
+/** @brief Notify that a next track event was received. Calls hw_cb and sends +EVENT: NEXT_TRACK to SOC. */
+void at_cmd_core_notify_next_track_received(void);
+
+/** @brief Register a callback invoked when previous track should be applied to hardware (HS side). */
+void at_cmd_core_register_pre_track_cb(void (*cb)(void));
+
+/** @brief Notify that a previous track event was received. Calls hw_cb and sends +EVENT: PRE_TRACK to SOC. */
+void at_cmd_core_notify_pre_track_received(void);
+
+/**
  * @brief Apply a volume value received from the remote device over UWB.
  *
  * Call this from the app's RX data handler when a CMD_VOL packet is received.

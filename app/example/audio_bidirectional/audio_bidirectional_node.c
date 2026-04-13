@@ -172,6 +172,12 @@ static device_pairing_state_t device_pairing_state;
 static pairing_cfg_t app_pairing_cfg;
 static pairing_assigned_address_t pairing_assigned_address;
 static uint8_t s_battery_level_cache = 0;
+static bool    s_vol_received_from_dg = false; /*!< True while processing a CMD_VOL from DG — prevents echo. */
+static bool    s_vol_report_pending   = false; /*!< Set when local vol change needs to be reported to DG. */
+static uint8_t s_vol_pending          = 0;     /*!< Volume value to report to DG. */
+static bool    s_play_report_pending  = false; /*!< Set when local play/pause button needs to be reported to DG. */
+static bool    s_audio_playing        = true;  /*!< Current play state; toggled by play_pause_hw. */
+static float   s_saved_vol_threshold  = 1.0f;  /*!< Volume threshold saved before mute, restored on play. */
 
 /* PRIVATE FUNCTION PROTOTYPE *************************************************/
 static void app_init(void);
@@ -217,6 +223,9 @@ static void app_audio_core_compression_discard_interface_init(sac_processing_int
 /* **** Button Actions **** */
 static void volume_up(void);
 static void volume_down(void);
+static void play_pause(void);
+static void app_play_pause_hw(void);
+static void app_stop_hw(void);
 static void enter_pairing_mode(void);
 static void unpair_device(void);
 static void abort_pairing_procedure(void);
@@ -243,6 +252,8 @@ int main(void)
     at_cmd_core_register_disconnect_cb(app_start_disconnect);
     at_cmd_core_register_shutdown_cb(app_start_shutdown);
     at_cmd_core_register_vol_cb(app_set_volume);
+    at_cmd_core_register_play_cb(app_play_pause_hw);
+    at_cmd_core_register_stop_cb(app_stop_hw);
     at_cmd_core_register_i2s_mux_cb(app_set_i2s_mux);
     //at_cmd_core_register_battery_cb(facade_read_battery_level);
 
@@ -287,7 +298,7 @@ int main(void)
         case DEVICE_PAIRED:
             /* When the device is paired, normal operations are executed. */
             fallback_led_handler();
-            facade_button_handling(unpair_device, NULL, volume_up, volume_down);
+            facade_button_handling(unpair_device, play_pause, volume_up, volume_down);
             break;
         default:
             facade_print_error_string("An unknown device pairing state occured.");
@@ -660,7 +671,17 @@ static void conn_rx_data_success_callback(void *conn)
         /* Application command packet received from DG over UWB. */
         app_cmd_t *cmd = (app_cmd_t *)&received_user_data;
         if (cmd->cmd_type == CMD_VOL) {
+            s_vol_received_from_dg = true;
             at_cmd_core_notify_vol_received(cmd->value); /* apply hw + notify SOC */
+            s_vol_received_from_dg = false;
+        } else if (cmd->cmd_type == CMD_PLAY) {
+            at_cmd_core_notify_play_received(); /* apply hw + notify SOC; no echo back to DG */
+        } else if (cmd->cmd_type == CMD_STOP) {
+            at_cmd_core_notify_stop_received(); /* apply hw + notify SOC */
+        } else if (cmd->cmd_type == CMD_NEXT_TRACK) {
+            at_cmd_core_notify_next_track_received();
+        } else if (cmd->cmd_type == CMD_PRE_TRACK) {
+            at_cmd_core_notify_pre_track_received();
         }
         return;
     }
@@ -1129,6 +1150,52 @@ static void volume_down(void)
     ASSERT_SAC_STATUS(sac_status);
 }
 
+/** @brief Play/Pause hardware callback — toggle SAC audio mute state.
+ *
+ *  If playing: saves current volume threshold then mutes via SAC_VOLUME_MUTE.
+ *  If paused:  restores saved threshold so audio resumes at previous level.
+ */
+static void app_play_pause_hw(void)
+{
+    sac_status_t sac_status = SAC_OK;
+
+    if (s_audio_playing) {
+        s_saved_vol_threshold = main_channel_volume_instance._internal.volume_threshold;
+        sac_processing_ctrl(main_channel_volume_processing, main_channel_sac_pipeline,
+                            SAC_VOLUME_MUTE, SAC_NO_ARG, &sac_status);
+        ASSERT_SAC_STATUS(sac_status);
+        s_audio_playing = false;
+    } else {
+        main_channel_volume_instance._internal.volume_threshold = s_saved_vol_threshold;
+        s_audio_playing = true;
+    }
+}
+
+/** @brief Stop hardware callback — mute SAC audio (non-toggle). */
+static void app_stop_hw(void)
+{
+    sac_status_t sac_status = SAC_OK;
+
+    if (s_audio_playing) {
+        s_saved_vol_threshold = main_channel_volume_instance._internal.volume_threshold;
+    }
+    sac_processing_ctrl(main_channel_volume_processing, main_channel_sac_pipeline,
+                        SAC_VOLUME_MUTE, SAC_NO_ARG, &sac_status);
+    ASSERT_SAC_STATUS(sac_status);
+    s_audio_playing = false;
+}
+
+/** @brief Play/Pause button handler (btn2).
+ *
+ *  Notifies the local SOC (+EVENT: PLAY) and schedules a CMD_PLAY packet
+ *  to be sent to the DG coordinator on the next data_callback tick.
+ */
+static void play_pause(void)
+{
+    app_play_pause_hw();        /* toggle SAC mute state */
+    s_play_report_pending = true; /* send CMD_PLAY to DG on next data_callback → DG SOC gets +EVENT: PLAY */
+}
+
 /** @brief SAI DMA TX complete callback.
  *
  *  This feeds the codec with audio packets. It needs to be executed every time a DMA transfer to the codec is completed
@@ -1326,6 +1393,20 @@ static void data_callback(void)
 
     /* Send the button state to the Coordinator. */
     wireless_send_data(&transmitted_user_data, sizeof(transmitted_user_data), &swc_err);
+
+    /* Report play/pause event to DG if triggered locally (HS button press). */
+    if (s_play_report_pending) {
+        s_play_report_pending = false;
+        app_cmd_t play_cmd = {CMD_PLAY, 0};
+        wireless_send_data(&play_cmd, sizeof(play_cmd), &swc_err);
+    }
+
+    /* Report volume change to DG if locally initiated (AT+VOL=N from HS SOC). */
+    if (s_vol_report_pending) {
+        s_vol_report_pending = false;
+        app_cmd_t vol_cmd = {CMD_VOL, s_vol_pending};
+        wireless_send_data(&vol_cmd, sizeof(vol_cmd), &swc_err);
+    }
 
     /* Send battery level to DG every ~30 s (data_callback fires every 10 ms). */
 #define BATTERY_REPORT_INTERVAL_COUNT 3000
@@ -1657,6 +1738,14 @@ static void app_start_shutdown(void)
  */
 static void app_set_volume(uint8_t vol)
 {
-    (void)vol;
-    /* Placeholder: apply vol to audio hardware here (e.g. sac_volume_ctrl). */
+    /* Map AT+VOL 0-100 to SAC volume factor 0.0-1.0.
+     * volume_factor will smoothly converge to volume_threshold via SAC_VOLUME_GRAD steps. */
+    main_channel_volume_instance._internal.volume_threshold = vol / 100.0f;
+
+    /* If volume was set locally (HS SOC via AT+VOL=N), report back to DG so DG cache stays in sync.
+     * If it came from DG (s_vol_received_from_dg == true), skip to avoid echo loop. */
+    if (!s_vol_received_from_dg) {
+        s_vol_pending        = vol;
+        s_vol_report_pending = true;
+    }
 }
