@@ -81,9 +81,9 @@ void facade_board_init(void)
 
 void facade_audio_coord_init(void)
 {
-    has_codec = true; /* Coordinator has codec */
-    #if 0 //AV_IND_BOARD_BRING_UP
-    //master
+    #if defined(AV_IND_COORD)
+    /* AV IND Coordinator (no codec): SAI master mode for I2S input */
+    has_codec = false;
     quasar_sai_config_t sai_config = {
         .rx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -92,36 +92,14 @@ void facade_audio_coord_init(void)
         .sai_audio_frequency = QUASAR_SAI_AUDIO_FREQUENCY_48K,
     };
 
-
-    /* Reset codec before initializing the SAI. */
+    /* Coordinator has no codec - only initialize SAI for I2S input. */
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
 
-    /* Initialize the codec for record path when MCU drives clocks. */
-    max98091_codec_cfg_t cfg = {
-        .sampling_rate = MAX98091_AUDIO_48KHZ,
-        .word_size = MAX98091_AUDIO_24BITS,
-        .record_enabled = true,
-        .playback_enabled = false,
-        .record_filter_enabled = false,
-        .playback_filter_enabled = false,
-    };
-    /* Ensure codec is in a known state, then configure it. */
-    max98091_reset_codec(&codec_hal);
-    quasar_timer_delay_ms(1);
-    max98091_init(&codec_hal, &cfg);
-    /* Set codec DAI to Slave to use MCU clocks. */
-    {
-        uint8_t mm = 0;
-        quasar_audio_i2c_read_byte_blocking(codec_hal.i2c_addr, MAX98091_REG_MASTER_MODE, &mm);
-        mm &= ~(uint8_t)0x80; /* Clear MAS bit -> Slave */
-        quasar_audio_i2c_write_byte_blocking(codec_hal.i2c_addr, MAX98091_REG_MASTER_MODE, mm);
-    }
-
-
-    #else //SPARK EVK
-    //slave
+    #else
+    /* SPARK EVK Coordinator (with codec): SAI slave mode */
+    has_codec = true;
     quasar_sai_config_t sai_config = {
         .rx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -145,14 +123,14 @@ void facade_audio_coord_init(void)
     };
     max98091_init(&codec_hal, &cfg);
 
-
-    #endif //AV_IND_BOARD_BRING_UP
+    #endif /* AV_IND_COORD */
 }
 
 void facade_audio_node_init(void)
 {
-    #if 1 //AV_IND_BOARD_BRING_UP
-    //master (Node has no codec, just SAI master for I2S output)
+    #if defined(AV_IND_NODE) || !defined(SPARK_EVK_NODE)
+    /* AV IND Node (no codec): SAI master mode for I2S output */
+    has_codec = false;
     quasar_sai_config_t sai_config = {
         .tx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -161,15 +139,14 @@ void facade_audio_node_init(void)
         .sai_audio_frequency = QUASAR_SAI_AUDIO_FREQUENCY_48K,
     };
 
-
     /* Node has no codec - only initialize SAI for I2S output. */
     quasar_timer_delay_ms(1);
     /* Initialize the SAI peripheral. */
     quasar_audio_init_sai(sai_config);
 
-
-    #else //SPARK EVK
-    //slave
+    #else
+    /* SPARK EVK Node (with codec): SAI slave mode */
+    has_codec = true;
     quasar_sai_config_t sai_config = {
         .tx_sai_mono_stereo = QUASAR_SAI_MODE_STEREO,
         .sai_bit_depth = QUASAR_SAI_BIT_DEPTH_24BITS,
@@ -193,10 +170,7 @@ void facade_audio_node_init(void)
     };
     max98091_init(&codec_hal, &cfg);
 
-
-    #endif //AV_IND_BOARD_BRING_UP
-
-
+    #endif /* AV_IND_NODE */
 }
 
 void facade_audio_deinit(void)
@@ -392,14 +366,26 @@ void facade_notify_enter_pairing(void)
     uint16_t delay_ms = DELAY_MS_LONG_PERIOD;
     uint8_t repeat = LED_BLINK_REPEAT;
 
-    quasar_rgb_clear();
-    quasar_rgb_configure_color(QUASAR_RGB_COLOR_BLUE);
-
-    for (uint8_t i = 0; i < repeat; i++) {
-        quasar_timer_delay_ms(delay_ms);
-        quasar_rgb_set();
-        quasar_timer_delay_ms(delay_ms);
+    if (has_codec) {
+        /* Coordinator (SPARK EVK with codec): Use RGB LED */
         quasar_rgb_clear();
+        quasar_rgb_configure_color(QUASAR_RGB_COLOR_BLUE);
+
+        for (uint8_t i = 0; i < repeat; i++) {
+            quasar_timer_delay_ms(delay_ms);
+            quasar_rgb_set();
+            quasar_timer_delay_ms(delay_ms);
+            quasar_rgb_clear();
+        }
+    } else {
+        /* Node (AV IND without codec): Use PA1 (USER_LED_1) */
+        quasar_led_clear(QUASAR_LED_USER_1);
+        for (uint8_t i = 0; i < 3; i++) {
+            quasar_timer_delay_ms(delay_ms);
+            quasar_led_set(QUASAR_LED_USER_1);
+            quasar_timer_delay_ms(delay_ms);
+            quasar_led_clear(QUASAR_LED_USER_1);
+        }
     }
 }
 
@@ -408,23 +394,40 @@ void facade_notify_not_paired(void)
     uint16_t delay_ms = DELAY_MS_LONG_PERIOD;
     uint8_t repeat = LED_BLINK_REPEAT;
 
-    quasar_rgb_clear();
-    quasar_rgb_configure_color(QUASAR_RGB_COLOR_RED);
-
-    for (uint8_t i = 0; i < repeat; i++) {
-        quasar_timer_delay_ms(delay_ms);
-        quasar_rgb_set();
-        quasar_timer_delay_ms(delay_ms);
+    if (has_codec) {
+        /* Coordinator (SPARK EVK with codec): Use RGB LED */
         quasar_rgb_clear();
+        quasar_rgb_configure_color(QUASAR_RGB_COLOR_RED);
+
+        for (uint8_t i = 0; i < repeat; i++) {
+            quasar_timer_delay_ms(delay_ms);
+            quasar_rgb_set();
+            quasar_timer_delay_ms(delay_ms);
+            quasar_rgb_clear();
+        }
+    } else {
+        /* Node (AV IND without codec): Use PA1 (USER_LED_1) blink fast */
+        quasar_led_clear(QUASAR_LED_USER_1);
+        for (uint8_t i = 0; i < repeat; i++) {
+            quasar_timer_delay_ms(delay_ms);
+            quasar_led_set(QUASAR_LED_USER_1);
+            quasar_timer_delay_ms(delay_ms);
+            quasar_led_clear(QUASAR_LED_USER_1);
+        }
     }
 }
 
 void facade_notify_pairing_successful(void)
 {
-    /* Restore original coordinator pairing indication: RGB magenta solid. */
-    quasar_rgb_clear();
-    quasar_rgb_configure_color(QUASAR_RGB_COLOR_MAGENTA);
-    quasar_rgb_set();
+    if (has_codec) {
+        /* Coordinator (SPARK EVK with codec): RGB magenta solid */
+        quasar_rgb_clear();
+        quasar_rgb_configure_color(QUASAR_RGB_COLOR_MAGENTA);
+        quasar_rgb_set();
+    } else {
+        /* Node (AV IND without codec): PA1 (USER_LED_1) solid on */
+        quasar_led_set(QUASAR_LED_USER_1);
+    }
 }
 
 void facade_led_all_off(void)

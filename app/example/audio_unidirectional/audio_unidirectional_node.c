@@ -1062,6 +1062,40 @@ static void print_stats(void)
                                                  sizeof(stats_string) - string_length, &swc_err);
     ASSERT_SWC_STATUS(swc_err);
 
+    /* ** Node Debug (g_node_dbg) ** */
+    {
+        static uint32_t last_swc_produce = 0;
+        static uint32_t last_pipeline_process = 0;
+        static uint32_t last_i2s_consume = 0;
+        uint32_t d_prod = g_node_dbg.swc_produce_count - last_swc_produce;
+        uint32_t d_proc = g_node_dbg.pipeline_process_count - last_pipeline_process;
+        uint32_t d_cons = g_node_dbg.i2s_consume_count - last_i2s_consume;
+        last_swc_produce = g_node_dbg.swc_produce_count;
+        last_pipeline_process = g_node_dbg.pipeline_process_count;
+        last_i2s_consume = g_node_dbg.i2s_consume_count;
+
+        const char *dbg_str = "\n<<  Debug (Node)  >>\n\r";
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length, dbg_str);
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                                  "SWC Produce/s: %lu | Proc/s: %lu | I2S Cons/s: %lu\r\n",
+                                  (unsigned long)d_prod, (unsigned long)d_proc, (unsigned long)d_cons);
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                                  "Fallback: %u | Payload Size: %u\r\n",
+                                  (unsigned)g_node_dbg.fallback_active, (unsigned)g_node_dbg.last_payload_size);
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                                  "Seq last/exp/lost: %lu/%lu/%lu\r\n",
+                                  (unsigned long)g_node_dbg.seq_last, (unsigned long)g_node_dbg.seq_expected,
+                                  (unsigned long)g_node_dbg.seq_lost);
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                                  "Buffers P/C: %lu/%lu\r\n",
+                                  (unsigned long)g_node_dbg.producer_buffer_load,
+                                  (unsigned long)g_node_dbg.consumer_buffer_load);
+        string_length += snprintf(stats_string + string_length, sizeof(stats_string) - string_length,
+                                  "I2S OUT L/R: 0x%08lX / 0x%08lX\r\n",
+                                  (unsigned long)g_node_dbg.last_left_sample,
+                                  (unsigned long)g_node_dbg.last_right_sample);
+    }
+
     facade_print_string(stats_string);
 }
 
