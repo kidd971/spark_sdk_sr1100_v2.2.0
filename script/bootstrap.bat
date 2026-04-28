@@ -21,7 +21,7 @@ for %%A in ("%~dp0.") do set ORIGDIR=%%~dpA
 set MAMBA_ROOT_PREFIX=%ORIGDIR%\.micromamba
 set MICROMAMBAEXE=%MAMBA_ROOT_PREFIX%\micromamba.exe
 set _7ZREXE=%MAMBA_ROOT_PREFIX%\Library\bin\7zr.exe
-set _7ZA7Z=%MAMBA_ROOT_PREFIX%\Library\bin\7z2201-extra.7z
+set _7ZA7Z=%MAMBA_ROOT_PREFIX%\Library\bin\7z2600-extra.7z
 set _7ZAEXE=%MAMBA_ROOT_PREFIX%\Library\bin\7z-extra\7za.exe
 set PROJECT_ROOT=%ORIGDIR%
 set YML_FILE=%ORIGDIR%\script\environment.yml
@@ -50,7 +50,7 @@ if not exist %_7ZREXE% (
 
 if not exist %_7ZAEXE% (
     echo Downloading 7zip extra ...
-    call %POWERSHELL% -Command Set-Variable ProgressPreference SilentlyContinue; Invoke-Webrequest -URI https://www.7-zip.org/a/7z2201-extra.7z -OutFile %_7ZA7Z%
+    call %POWERSHELL% -Command Set-Variable ProgressPreference SilentlyContinue; Invoke-Webrequest -URI https://www.7-zip.org/a/7z2600-extra.7z -OutFile %_7ZA7Z%
 
     if not exist %_7ZA7Z% (
         echo Error : 7zip extra download failed
